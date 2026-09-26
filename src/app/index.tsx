@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AGENTS } from '@/agents';
 import InputBar from '@/components/chat/InputBar';
 import MessageList, { ChatMessage } from '@/components/chat/MessageList';
 import AgentMenu from '@/components/common/AgentMenu';
@@ -9,11 +10,6 @@ import Header from '@/components/common/Header';
 import SettingsModal from '@/components/common/SettingsModal';
 import { sendMessageToAgent } from '@/config/api';
 import { Colors } from '@/constants/theme';
-
-const AGENTS = [
-  { id: 'sante', name: 'Agent Santé' },
-  { id: 'prof', name: 'Agent Prof' },
-];
 
 export default function HomeScreen() {
   const [agentMenuVisible, setAgentMenuVisible] = useState(false);
@@ -38,7 +34,6 @@ export default function HomeScreen() {
     setIsLoading(true);
 
     try {
-      // Envoie l'historique complet (sans le "isUser" pour l'API)
       const apiMessages = newMessages.map((m) => ({
         role: m.isUser ? ('user' as const) : ('assistant' as const),
         content: m.text,
@@ -46,7 +41,7 @@ export default function HomeScreen() {
 
       const reply = await sendMessageToAgent({
         messages: apiMessages,
-        agentSystemPrompt: `Tu es ${selectedAgent.name}, un assistant utile et bienveillant.`,
+        agentSystemPrompt: selectedAgent.systemPrompt,
       });
 
       const agentMessage: ChatMessage = {
