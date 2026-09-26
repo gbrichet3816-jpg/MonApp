@@ -34,7 +34,8 @@
         }
       ],
       "expo-speech-recognition",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true,
