@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -9,6 +9,12 @@ import AgentMenu from '@/components/common/AgentMenu';
 import Header from '@/components/common/Header';
 import SettingsModal from '@/components/common/SettingsModal';
 import { sendMessageToAgent } from '@/config/api';
+import {
+  clearMessages,
+  initDatabase,
+  loadMessages,
+  saveMessage,
+} from '@/config/database';
 import { Colors } from '@/constants/theme';
 
 export default function HomeScreen() {
@@ -17,6 +23,21 @@ export default function HomeScreen() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Initialise la base au démarrage
+  useEffect(() => {
+    initDatabase();
+  }, []);
+
+  // Charge les messages quand on change d'agent
+  useEffect(() => {
+    if (selectedAgentId) {
+      const saved = loadMessages(selectedAgentId);
+      setMessages(saved);
+    } else {
+      setMessages([]);
+    }
+  }, [selectedAgentId]);
 
   const selectedAgent = AGENTS.find((a) => a.id === selectedAgentId);
   const headerTitle = selectedAgent ? selectedAgent.name : 'Aucun agent';
@@ -31,6 +52,15 @@ export default function HomeScreen() {
     };
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
+
+    // Sauvegarde le message de l'utilisateur
+    saveMessage({
+      id: userMessage.id,
+      agentId: selectedAgent.id,
+      text: userMessage.text,
+      isUser: true,
+    });
+
     setIsLoading(true);
 
     try {
@@ -50,6 +80,14 @@ export default function HomeScreen() {
         isUser: false,
       };
       setMessages((prev) => [...prev, agentMessage]);
+
+      // Sauvegarde la réponse de l'agent
+      saveMessage({
+        id: agentMessage.id,
+        agentId: selectedAgent.id,
+        text: agentMessage.text,
+        isUser: false,
+      });
     } catch (error) {
       const errorMessage: ChatMessage = {
         id: `error-${Date.now()}`,
@@ -60,6 +98,12 @@ export default function HomeScreen() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleClearConversation = () => {
+    if (!selectedAgent) return;
+    clearMessages(selectedAgent.id);
+    setMessages([]);
   };
 
   const emptyText = selectedAgent
@@ -88,7 +132,6 @@ export default function HomeScreen() {
         selectedAgentId={selectedAgentId}
         onSelectAgent={(id) => {
           setSelectedAgentId(id);
-          setMessages([]);
           setAgentMenuVisible(false);
         }}
         onClose={() => setAgentMenuVisible(false)}
