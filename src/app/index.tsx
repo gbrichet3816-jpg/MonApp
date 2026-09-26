@@ -1,11 +1,13 @@
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import InputBar from '@/components/chat/InputBar';
+import MessageList, { ChatMessage } from '@/components/chat/MessageList';
 import AgentMenu from '@/components/common/AgentMenu';
 import Header from '@/components/common/Header';
 import SettingsModal from '@/components/common/SettingsModal';
-import { Colors, Spacing } from '@/constants/theme';
+import { Colors } from '@/constants/theme';
 
 const AGENTS = [
   { id: 'sante', name: 'Agent Santé' },
@@ -16,12 +18,36 @@ export default function HomeScreen() {
   const [agentMenuVisible, setAgentMenuVisible] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   const selectedAgent = AGENTS.find((a) => a.id === selectedAgentId);
   const headerTitle = selectedAgent ? selectedAgent.name : 'Aucun agent';
 
+  const handleSend = (text: string) => {
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      text,
+      isUser: true,
+    };
+    setMessages((prev) => [...prev, userMessage]);
+
+    // Réponse temporaire de l'agent (sera remplacée par DeepSeek plus tard)
+    setTimeout(() => {
+      const agentMessage: ChatMessage = {
+        id: `agent-${Date.now()}`,
+        text: `Je suis ${selectedAgent?.name ?? "l'agent"}. Je te répondrai bientôt !`,
+        isUser: false,
+      };
+      setMessages((prev) => [...prev, agentMessage]);
+    }, 600);
+  };
+
+  const emptyText = selectedAgent
+    ? `Conversation avec ${selectedAgent.name}. Écris ton premier message !`
+    : 'Sélectionne un agent dans le menu pour commencer.';
+
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
       <Header
         agentName={headerTitle}
         onOpenAgents={() => setAgentMenuVisible(true)}
@@ -30,15 +56,11 @@ export default function HomeScreen() {
 
       <KeyboardAvoidingView
         style={styles.body}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
-        <View style={styles.messages}>
-          <Text style={styles.placeholder}>
-            {selectedAgent
-              ? `Conversation avec ${selectedAgent.name}`
-              : 'Sélectionne un agent dans le menu pour commencer.'}
-          </Text>
-        </View>
+        <MessageList messages={messages} emptyText={emptyText} />
+        <InputBar onSend={handleSend} disabled={!selectedAgent} />
       </KeyboardAvoidingView>
 
       <AgentMenu
@@ -47,6 +69,7 @@ export default function HomeScreen() {
         selectedAgentId={selectedAgentId}
         onSelectAgent={(id) => {
           setSelectedAgentId(id);
+          setMessages([]);
           setAgentMenuVisible(false);
         }}
         onClose={() => setAgentMenuVisible(false)}
@@ -64,16 +87,5 @@ const styles = StyleSheet.create({
   },
   body: {
     flex: 1,
-  },
-  messages: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: Spacing.four,
-  },
-  placeholder: {
-    fontSize: 16,
-    color: Colors.light.textSecondary,
-    textAlign: 'center',
   },
 });
