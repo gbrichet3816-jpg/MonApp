@@ -7,6 +7,7 @@ import MessageList, { ChatMessage } from '@/components/chat/MessageList';
 import AgentMenu from '@/components/common/AgentMenu';
 import Header from '@/components/common/Header';
 import SettingsModal from '@/components/common/SettingsModal';
+import { sendMessageToAgent } from '@/config/api';
 import { Colors } from '@/constants/theme';
 
 const AGENTS = [
@@ -19,27 +20,51 @@ export default function HomeScreen() {
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   const selectedAgent = AGENTS.find((a) => a.id === selectedAgentId);
   const headerTitle = selectedAgent ? selectedAgent.name : 'Aucun agent';
 
-  const handleSend = (text: string) => {
+  const handleSend = async (text: string) => {
+    if (!selectedAgent) return;
+
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       text,
       isUser: true,
     };
-    setMessages((prev) => [...prev, userMessage]);
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
+    setIsLoading(true);
 
-    // Réponse temporaire de l'agent (sera remplacée par DeepSeek plus tard)
-    setTimeout(() => {
+    try {
+      // Envoie l'historique complet (sans le "isUser" pour l'API)
+      const apiMessages = newMessages.map((m) => ({
+        role: m.isUser ? ('user' as const) : ('assistant' as const),
+        content: m.text,
+      }));
+
+      const reply = await sendMessageToAgent({
+        messages: apiMessages,
+        agentSystemPrompt: `Tu es ${selectedAgent.name}, un assistant utile et bienveillant.`,
+      });
+
       const agentMessage: ChatMessage = {
         id: `agent-${Date.now()}`,
-        text: `Je suis ${selectedAgent?.name ?? "l'agent"}. Je te répondrai bientôt !`,
+        text: reply,
         isUser: false,
       };
       setMessages((prev) => [...prev, agentMessage]);
-    }, 600);
+    } catch (error) {
+      const errorMessage: ChatMessage = {
+        id: `error-${Date.now()}`,
+        text: `Erreur : ${error instanceof Error ? error.message : 'inconnue'}`,
+        isUser: false,
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const emptyText = selectedAgent
@@ -57,10 +82,9 @@ export default function HomeScreen() {
       <KeyboardAvoidingView
         style={styles.body}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
         <MessageList messages={messages} emptyText={emptyText} />
-        <InputBar onSend={handleSend} disabled={!selectedAgent} />
+        <InputBar onSend={handleSend} disabled={!selectedAgent || isLoading} />
       </KeyboardAvoidingView>
 
       <AgentMenu
