@@ -1,40 +1,93 @@
 /**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
+ * Charte graphique de l'application
+ * 60% Blanc / 30% Bleu / 10% Vert
  */
 
 import '@/global.css';
 
 import { Platform } from 'react-native';
 
+// 🎨 Palette de couleurs
+const Palette = {
+  // 60% — Blanc et nuances claires
+  white: '#FFFFFF',
+  offWhite: '#F7F9FC',
+  lightGray: '#EEF2F7',
+
+  // 30% — Bleus (interface, accents principaux)
+  blueLight: '#5B9BD5',
+  blue: '#2E6FB7',
+  blueDark: '#1E4D82',
+  blueSoft: '#D6E4F0',
+
+  // 10% — Vert (validation, statut actif)
+  green: '#2ECC71',
+  greenDark: '#27AE60',
+  greenSoft: '#D5F4E6',
+
+  // Neutres (texte, bordures)
+  textPrimary: '#1A1A1A',
+  textSecondary: '#5A6472',
+  textLight: '#9CA3AF',
+  border: '#E2E8F0',
+
+  // États
+  error: '#E74C3C',
+  warning: '#F39C12',
+} as const;
+
+// 🌗 Thème clair (le seul utilisé pour l'instant)
 export const Colors = {
   light: {
-    text: '#000000',
-    background: '#ffffff',
-    backgroundElement: '#F0F0F3',
-    backgroundSelected: '#E0E1E6',
-    textSecondary: '#60646C',
+    // Fonds
+    background: Palette.white,
+    backgroundElement: Palette.offWhite,
+    backgroundSelected: Palette.blueSoft,
+
+    // Textes
+    text: Palette.textPrimary,
+    textSecondary: Palette.textSecondary,
+
+    // Accents
+    primary: Palette.blue,
+    primaryDark: Palette.blueDark,
+    primaryLight: Palette.blueLight,
+    success: Palette.green,
+    successDark: Palette.greenDark,
+
+    // Bordures
+    border: Palette.border,
+
+    // États
+    error: Palette.error,
+    warning: Palette.warning,
   },
   dark: {
-    text: '#ffffff',
-    background: '#000000',
-    backgroundElement: '#212225',
-    backgroundSelected: '#2E3135',
-    textSecondary: '#B0B4BA',
+    // On garde les mêmes pour l'instant (on gèrera le mode sombre plus tard)
+    background: Palette.white,
+    backgroundElement: Palette.offWhite,
+    backgroundSelected: Palette.blueSoft,
+    text: Palette.textPrimary,
+    textSecondary: Palette.textSecondary,
+    primary: Palette.blue,
+    primaryDark: Palette.blueDark,
+    primaryLight: Palette.blueLight,
+    success: Palette.green,
+    successDark: Palette.greenDark,
+    border: Palette.border,
+    error: Palette.error,
+    warning: Palette.warning,
   },
 } as const;
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
+// 🔤 Polices (inchangé)
 export const Fonts = Platform.select({
   ios: {
-    /** iOS `UIFontDescriptorSystemDesignDefault` */
     sans: 'system-ui',
-    /** iOS `UIFontDescriptorSystemDesignSerif` */
     serif: 'ui-serif',
-    /** iOS `UIFontDescriptorSystemDesignRounded` */
     rounded: 'ui-rounded',
-    /** iOS `UIFontDescriptorSystemDesignMonospaced` */
     mono: 'ui-monospace',
   },
   default: {
@@ -51,6 +104,7 @@ export const Fonts = Platform.select({
   },
 });
 
+// 📏 Espacements (inchangé)
 export const Spacing = {
   half: 2,
   one: 4,
