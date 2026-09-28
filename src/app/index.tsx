@@ -3,6 +3,11 @@ import { KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AGENTS } from '@/agents';
+import {
+  parseMedicationFromMessage,
+  parseTimeFromMessage,
+  scheduleMedicationReminder,
+} from '@/agents/sante/reminders';
 import InputBar from '@/components/chat/InputBar';
 import MessageList, { ChatMessage } from '@/components/chat/MessageList';
 import AgentMenu from '@/components/common/AgentMenu';
@@ -10,10 +15,10 @@ import Header from '@/components/common/Header';
 import SettingsModal from '@/components/common/SettingsModal';
 import { sendMessageToAgent } from '@/config/api';
 import {
-  clearMessages,
   initDatabase,
   loadMessages,
   saveMessage,
+  saveReminder
 } from '@/config/database';
 import { Colors } from '@/constants/theme';
 
@@ -24,12 +29,10 @@ export default function HomeScreen() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Initialise la base au démarrage
   useEffect(() => {
     initDatabase();
   }, []);
 
-  // Charge les messages quand on change d'agent
   useEffect(() => {
     if (selectedAgentId) {
       const saved = loadMessages(selectedAgentId);
@@ -53,13 +56,57 @@ export default function HomeScreen() {
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
 
-    // Sauvegarde le message de l'utilisateur
     saveMessage({
       id: userMessage.id,
       agentId: selectedAgent.id,
       text: userMessage.text,
       isUser: true,
     });
+
+    // Détection de rappel (agent Santé uniquement)
+    if (selectedAgent.id === 'sante') {
+      const time = parseTimeFromMessage(text);
+      const medication = parseMedicationFromMessage(text);
+      const mentionsReminder = /rappelle|rappel|médicament|medicament|prendre/i.test(text);
+
+      if (time && mentionsReminder) {
+        const medicationName = medication || 'ton médicament';
+        const reminderId = `reminder-${Date.now()}`;
+
+        try {
+          const notificationId = await scheduleMedicationReminder({
+            medicationName,
+            time,
+            reminderId,
+          });
+
+          if (notificationId) {
+            saveReminder({
+              id: reminderId,
+              agentId: selectedAgent.id,
+              medicationName,
+              time,
+              notificationId,
+            });
+
+            const confirmMessage: ChatMessage = {
+              id: `agent-${Date.now()}`,
+              text: `C'est noté ! Je te rappellerai de prendre ${medicationName} à ${time.replace(':', 'h')} chaque jour.`,
+            };
+            setMessages((prev) => [...prev, confirmMessage]);
+            saveMessage({
+              id: confirmMessage.id,
+              agentId: selectedAgent.id,
+              text: confirmMessage.text,
+              isUser: false,
+            });
+            return;
+          }
+        } catch (error) {
+          console.warn('Erreur création rappel:', error);
+        }
+      }
+    }
 
     setIsLoading(true);
 
@@ -81,7 +128,6 @@ export default function HomeScreen() {
       };
       setMessages((prev) => [...prev, agentMessage]);
 
-      // Sauvegarde la réponse de l'agent
       saveMessage({
         id: agentMessage.id,
         agentId: selectedAgent.id,
@@ -98,12 +144,6 @@ export default function HomeScreen() {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleClearConversation = () => {
-    if (!selectedAgent) return;
-    clearMessages(selectedAgent.id);
-    setMessages([]);
   };
 
   const emptyText = selectedAgent

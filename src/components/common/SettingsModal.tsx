@@ -28,7 +28,17 @@ export default function SettingsModal({ visible, onClose }: Props) {
   const testPermission = async () => {
     const granted = await requestNotificationPermission();
     if (granted) {
-      Alert.alert('Permission accordée', 'Les notifications sont autorisées.');
+      // Demande aussi la permission pour les alarmes exactes (Android 12+)
+      try {
+        const { requestExactAlarmPermission } = require('expo-exact-alarms-permission');
+        requestExactAlarmPermission();
+        Alert.alert(
+          'Permission accordée',
+          'Les notifications sont autorisées. Si une page de paramètres Android s\'ouvre, active "Alarmes et rappels".',
+        );
+      } catch (e) {
+        Alert.alert('Permission accordée', 'Les notifications sont autorisées.');
+      }
     } else {
       Alert.alert(
         'Permission refusée',
