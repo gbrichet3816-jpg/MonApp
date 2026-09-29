@@ -20,6 +20,10 @@ import {
   saveMessage,
   saveReminder
 } from '@/config/database';
+import {
+  registerNotificationTask,
+  setupMedicationCategory,
+} from '@/config/notifications';
 import { Colors } from '@/constants/theme';
 
 export default function HomeScreen() {
@@ -31,6 +35,8 @@ export default function HomeScreen() {
 
   useEffect(() => {
     initDatabase();
+    setupMedicationCategory();
+    registerNotificationTask();
   }, []);
 
   useEffect(() => {
@@ -63,7 +69,6 @@ export default function HomeScreen() {
       isUser: true,
     });
 
-    // Détection de rappel (agent Santé uniquement)
     if (selectedAgent.id === 'sante') {
       const time = parseTimeFromMessage(text);
       const medication = parseMedicationFromMessage(text);
@@ -92,6 +97,7 @@ export default function HomeScreen() {
             const confirmMessage: ChatMessage = {
               id: `agent-${Date.now()}`,
               text: `C'est noté ! Je te rappellerai de prendre ${medicationName} à ${time.replace(':', 'h')} chaque jour.`,
+              isUser: false,
             };
             setMessages((prev) => [...prev, confirmMessage]);
             saveMessage({

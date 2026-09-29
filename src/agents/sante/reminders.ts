@@ -32,6 +32,7 @@ export async function scheduleMedicationReminder({
       title: '💊 Rappel de médicament',
       body: `C'est l'heure de prendre : ${medicationName}`,
       date: target,
+      categoryIdentifier: 'medication-reminder',
       data: {
         type: 'medication-reminder',
         reminderId,

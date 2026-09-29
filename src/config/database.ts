@@ -1,9 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
-// Ouvre (ou crée) la base de données locale
 const db = SQLite.openDatabaseSync('monapp.db');
 
-// Initialise la base : crée les tables si elles n'existent pas
 export function initDatabase() {
   db.execSync(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -16,12 +14,26 @@ export function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_messages_agent
       ON messages (agent_id, created_at);
-  `);
 
-  initRemindersTable();
+    CREATE TABLE IF NOT EXISTS reminders (
+      id TEXT PRIMARY KEY NOT NULL,
+      agent_id TEXT NOT NULL,
+      medication_name TEXT NOT NULL,
+      time TEXT NOT NULL,
+      notification_id TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS reminder_responses (
+      id TEXT PRIMARY KEY NOT NULL,
+      reminder_id TEXT NOT NULL,
+      response TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
 }
 
-// Sauvegarde un message dans la base
 export function saveMessage({
   id,
   agentId,
@@ -39,7 +51,6 @@ export function saveMessage({
   );
 }
 
-// Charge les messages d'un agent (les 50 plus récents)
 export function loadMessages(agentId: string) {
   const rows = db.getAllSync<{
     id: string;
@@ -60,31 +71,14 @@ export function loadMessages(agentId: string) {
   }));
 }
 
-// Efface toutes les conversations d'un agent
 export function clearMessages(agentId: string) {
   db.runSync('DELETE FROM messages WHERE agent_id = ?', [agentId]);
 }
 
-// Efface TOUTES les conversations (tous agents confondus)
 export function clearAllMessages() {
   db.runSync('DELETE FROM messages');
 }
-// Table des rappels de médicaments
-export function initRemindersTable() {
-  db.execSync(`
-    CREATE TABLE IF NOT EXISTS reminders (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL,
-      medication_name TEXT NOT NULL,
-      time TEXT NOT NULL,
-      notification_id TEXT,
-      active INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL
-    );
-  `);
-}
 
-// Sauvegarde un rappel
 export function saveReminder({
   id,
   agentId,
@@ -104,7 +98,6 @@ export function saveReminder({
   );
 }
 
-// Charge les rappels actifs d'un agent
 export function loadReminders(agentId: string) {
   return db.getAllSync<{
     id: string;
@@ -117,12 +110,34 @@ export function loadReminders(agentId: string) {
   }>('SELECT * FROM reminders WHERE agent_id = ? AND active = 1', [agentId]);
 }
 
-// Désactive un rappel
 export function deactivateReminder(id: string) {
   db.runSync('UPDATE reminders SET active = 0 WHERE id = ?', [id]);
 }
 
-// Efface tous les rappels d'un agent
 export function clearReminders(agentId: string) {
   db.runSync('DELETE FROM reminders WHERE agent_id = ?', [agentId]);
+}
+
+export function saveReminderResponse({
+  reminderId,
+  response,
+}: {
+  reminderId: string;
+  response: string;
+}) {
+  db.runSync(
+    'INSERT INTO reminder_responses (id, reminder_id, response, created_at) VALUES (?, ?, ?, ?)',
+    [`${reminderId}-${Date.now()}`, reminderId, response, Date.now()],
+  );
+}
+
+export function loadReminderResponses(reminderId: string) {
+  return db.getAllSync<{
+    id: string;
+    reminder_id: string;
+    response: string;
+    created_at: number;
+  }>('SELECT * FROM reminder_responses WHERE reminder_id = ? ORDER BY created_at DESC', [
+    reminderId,
+  ]);
 }
