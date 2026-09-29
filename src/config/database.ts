@@ -126,21 +126,23 @@ export function clearReminders(agentId: string) {
   db.runSync('DELETE FROM reminders WHERE agent_id = ?', [agentId]);
 }
 
-// Marque un rappel comme "déclenché" (la notification a été envoyée)
+// Marque un rappel comme "déclenché"
 export function markReminderFired(id: string) {
   db.runSync('UPDATE reminders SET last_fired_at = ? WHERE id = ?', [Date.now(), id]);
 }
 
-// Enregistre la réponse de l'utilisateur à un rappel
+// Enregistre la réponse de l'utilisateur
 export function setReminderResponse(id: string, response: string) {
   db.runSync('UPDATE reminders SET response = ? WHERE id = ?', [response, id]);
 }
 
-// Trouve TOUS les rappels déclenchés sans réponse (12 dernières heures)
-export function findAllPendingReminders(agentId: string) {
-  const twelveHoursAgo = Date.now() - 12 * 60 * 60 * 1000;
+// Trouve les rappels dont l'heure est passée aujourd'hui ET sans réponse
+// Marque automatiquement ceux qui viennent de "déclencher" (heure passée)
+export function findRemindersToAsk(agentId: string) {
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
-  return db.getAllSync<{
+  const rows = db.getAllSync<{
     id: string;
     agent_id: string;
     medication_name: string;
@@ -150,16 +152,24 @@ export function findAllPendingReminders(agentId: string) {
     created_at: number;
     last_fired_at: number | null;
     response: string | null;
-  }>(
-    `SELECT * FROM reminders 
-     WHERE agent_id = ? 
-       AND active = 1 
-       AND last_fired_at IS NOT NULL 
-       AND last_fired_at > ?
-       AND response IS NULL
-     ORDER BY last_fired_at ASC`,
-    [agentId, twelveHoursAgo],
-  );
+  }>('SELECT * FROM reminders WHERE agent_id = ? AND active = 1 AND response IS NULL', [agentId]);
+
+  return rows.filter((r) => {
+    const [h, m] = r.time.split(':').map(Number);
+    const reminderMinutes = h * 60 + m;
+
+    // L'heure du rappel est passée aujourd'hui ET il n'a pas encore été demandé
+    return reminderMinutes <= currentMinutes && r.last_fired_at === null;
+  });
+}
+
+// Marque TOUS ces rappels comme "déclenchés" (question posée)
+export function markRemindersAsAsked(ids: string[]) {
+  if (ids.length === 0) return;
+  const now = Date.now();
+  ids.forEach((id) => {
+    db.runSync('UPDATE reminders SET last_fired_at = ? WHERE id = ?', [now, id]);
+  });
 }
 
 export type Document = {

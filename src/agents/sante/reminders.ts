@@ -1,4 +1,3 @@
-import { markReminderFired } from '@/config/database';
 import {
   cancelNotification,
   scheduleNotification,
@@ -42,9 +41,6 @@ export async function scheduleMedicationReminder({
         medicationName,
       },
     });
-
-    // Marque comme déclenché (sera considéré comme tel au prochain démarrage)
-    markReminderFired(reminderId);
 
     return notificationId;
   } catch (error) {

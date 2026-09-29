@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -15,9 +15,10 @@ import Header from '@/components/common/Header';
 import SettingsModal from '@/components/common/SettingsModal';
 import { sendMessageToAgent } from '@/config/api';
 import {
-  findAllPendingReminders,
+  findRemindersToAsk,
   initDatabase,
   loadMessages,
+  markRemindersAsAsked,
   saveMessage,
   saveReminder,
   setReminderResponse,
@@ -31,10 +32,16 @@ export default function HomeScreen() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const isMounted = useRef(true);
 
   useEffect(() => {
+    isMounted.current = true;
     initDatabase();
     requestNotificationPermission();
+
+    return () => {
+      isMounted.current = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -43,9 +50,13 @@ export default function HomeScreen() {
       setMessages(saved);
 
       if (selectedAgentId === 'sante') {
-        setTimeout(() => {
-          checkPendingReminders();
+        const timer = setTimeout(() => {
+          if (isMounted.current) {
+            checkPendingReminders();
+          }
         }, 500);
+
+        return () => clearTimeout(timer);
       }
     } else {
       setMessages([]);
@@ -53,14 +64,19 @@ export default function HomeScreen() {
   }, [selectedAgentId]);
 
   const checkPendingReminders = () => {
-    const pending = findAllPendingReminders('sante');
-    if (pending.length === 0) return;
+    if (!isMounted.current) return;
 
-    const questions: ChatMessage[] = pending.map((p, index) => ({
+    const remindersToAsk = findRemindersToAsk('sante');
+    if (remindersToAsk.length === 0) return;
+
+    const questions: ChatMessage[] = remindersToAsk.map((r, index) => ({
       id: `agent-pending-${Date.now()}-${index}`,
-      text: `Tu as eu un rappel pour ${p.medication_name} à ${p.time.replace(':', 'h')}. Tu l'as bien pris ?`,
+      text: `Tu avais un rappel pour ${r.medication_name} à ${r.time.replace(':', 'h')}. Tu l'as bien pris ?`,
       isUser: false,
     }));
+
+    // Marque tous ces rappels comme "question posée"
+    markRemindersAsAsked(remindersToAsk.map((r) => r.id));
 
     setMessages((prev) => {
       const newQuestions = questions.filter(
@@ -104,20 +120,24 @@ export default function HomeScreen() {
 
     // Si on est en train de répondre à un rappel en attente
     if (selectedAgent.id === 'sante') {
-      const pending = findAllPendingReminders('sante');
-      if (pending.length > 0) {
+      const remindersToAsk = findRemindersToAsk('sante');
+      // Cherche un rappel déjà "questionné" mais sans réponse
+      const allReminders = remindersToAsk.length > 0 ? remindersToAsk : [];
+      // On regarde plutôt tous les rappels actifs sans réponse
+      if (allReminders.length > 0) {
         const lower = text.toLowerCase();
-        const firstPending = pending[0];
+        const first = allReminders[0];
         if (lower.includes('oui') || lower.includes('pris')) {
-          setReminderResponse(firstPending.id, 'taken');
+          setReminderResponse(first.id, 'taken');
         } else if (lower.includes('non') || lower.includes('pas')) {
-          setReminderResponse(firstPending.id, 'not_taken');
+          setReminderResponse(first.id, 'not_taken');
         } else if (lower.includes('plus tard') || lower.includes('attends')) {
-          setReminderResponse(firstPending.id, 'later');
+          setReminderResponse(first.id, 'later');
         }
       }
     }
 
+    // Détection de création de rappel
     if (selectedAgent.id === 'sante') {
       const time = parseTimeFromMessage(text);
       const medication = parseMedicationFromMessage(text);
@@ -176,6 +196,8 @@ export default function HomeScreen() {
         agentSystemPrompt: selectedAgent.systemPrompt,
       });
 
+      if (!isMounted.current) return;
+
       const agentMessage: ChatMessage = {
         id: `agent-${Date.now()}`,
         text: reply,
@@ -190,6 +212,8 @@ export default function HomeScreen() {
         isUser: false,
       });
     } catch (error) {
+      if (!isMounted.current) return;
+
       const errorMessage: ChatMessage = {
         id: `error-${Date.now()}`,
         text: `Erreur : ${error instanceof Error ? error.message : 'inconnue'}`,
@@ -197,7 +221,9 @@ export default function HomeScreen() {
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
-      setIsLoading(false);
+      if (isMounted.current) {
+        setIsLoading(false);
+      }
     }
   };
 
