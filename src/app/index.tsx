@@ -15,15 +15,14 @@ import Header from '@/components/common/Header';
 import SettingsModal from '@/components/common/SettingsModal';
 import { sendMessageToAgent } from '@/config/api';
 import {
+  findAllPendingReminders,
   initDatabase,
   loadMessages,
   saveMessage,
-  saveReminder
+  saveReminder,
+  setReminderResponse,
 } from '@/config/database';
-import {
-  registerNotificationTask,
-  setupMedicationCategory,
-} from '@/config/notifications';
+import { requestNotificationPermission } from '@/config/notifications';
 import { Colors } from '@/constants/theme';
 
 export default function HomeScreen() {
@@ -35,18 +34,52 @@ export default function HomeScreen() {
 
   useEffect(() => {
     initDatabase();
-    setupMedicationCategory();
-    registerNotificationTask();
+    requestNotificationPermission();
   }, []);
 
   useEffect(() => {
     if (selectedAgentId) {
       const saved = loadMessages(selectedAgentId);
       setMessages(saved);
+
+      if (selectedAgentId === 'sante') {
+        setTimeout(() => {
+          checkPendingReminders();
+        }, 500);
+      }
     } else {
       setMessages([]);
     }
   }, [selectedAgentId]);
+
+  const checkPendingReminders = () => {
+    const pending = findAllPendingReminders('sante');
+    if (pending.length === 0) return;
+
+    const questions: ChatMessage[] = pending.map((p, index) => ({
+      id: `agent-pending-${Date.now()}-${index}`,
+      text: `Tu as eu un rappel pour ${p.medication_name} à ${p.time.replace(':', 'h')}. Tu l'as bien pris ?`,
+      isUser: false,
+    }));
+
+    setMessages((prev) => {
+      const newQuestions = questions.filter(
+        (q) => !prev.some((m) => m.text === q.text),
+      );
+      if (newQuestions.length === 0) return prev;
+
+      newQuestions.forEach((q) => {
+        saveMessage({
+          id: q.id,
+          agentId: 'sante',
+          text: q.text,
+          isUser: false,
+        });
+      });
+
+      return [...prev, ...newQuestions];
+    });
+  };
 
   const selectedAgent = AGENTS.find((a) => a.id === selectedAgentId);
   const headerTitle = selectedAgent ? selectedAgent.name : 'Aucun agent';
@@ -68,6 +101,22 @@ export default function HomeScreen() {
       text: userMessage.text,
       isUser: true,
     });
+
+    // Si on est en train de répondre à un rappel en attente
+    if (selectedAgent.id === 'sante') {
+      const pending = findAllPendingReminders('sante');
+      if (pending.length > 0) {
+        const lower = text.toLowerCase();
+        const firstPending = pending[0];
+        if (lower.includes('oui') || lower.includes('pris')) {
+          setReminderResponse(firstPending.id, 'taken');
+        } else if (lower.includes('non') || lower.includes('pas')) {
+          setReminderResponse(firstPending.id, 'not_taken');
+        } else if (lower.includes('plus tard') || lower.includes('attends')) {
+          setReminderResponse(firstPending.id, 'later');
+        }
+      }
+    }
 
     if (selectedAgent.id === 'sante') {
       const time = parseTimeFromMessage(text);

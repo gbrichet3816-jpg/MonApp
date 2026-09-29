@@ -1,4 +1,8 @@
-import { cancelNotification, scheduleNotification } from '@/config/notifications';
+import { markReminderFired } from '@/config/database';
+import {
+  cancelNotification,
+  scheduleNotification,
+} from '@/config/notifications';
 
 export type MedicationReminder = {
   id: string;
@@ -32,13 +36,15 @@ export async function scheduleMedicationReminder({
       title: '💊 Rappel de médicament',
       body: `C'est l'heure de prendre : ${medicationName}`,
       date: target,
-      categoryIdentifier: 'medication-reminder',
       data: {
         type: 'medication-reminder',
         reminderId,
         medicationName,
       },
     });
+
+    // Marque comme déclenché (sera considéré comme tel au prochain démarrage)
+    markReminderFired(reminderId);
 
     return notificationId;
   } catch (error) {

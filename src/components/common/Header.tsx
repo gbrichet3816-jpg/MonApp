@@ -11,15 +11,28 @@ type Props = {
 };
 
 export default function Header({ agentName, onOpenAgents, onOpenSettings }: Props) {
+  const today = new Date();
+  const dateFormatted = today.toLocaleDateString('fr-FR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+
   return (
     <View style={styles.container}>
       <TouchableOpacity style={styles.iconButton} onPress={onOpenAgents}>
         <Ionicons name="menu" size={26} color={Colors.light.primary} />
       </TouchableOpacity>
 
-      <Text style={styles.title} numberOfLines={1}>
-        {agentName}
-      </Text>
+      <View style={styles.centerBlock}>
+        <Text style={styles.title} numberOfLines={1}>
+          {agentName}
+        </Text>
+        <Text style={styles.date} numberOfLines={1}>
+          {dateFormatted}
+        </Text>
+      </View>
 
       <View style={styles.rightButtons}>
         <TouchableOpacity
@@ -51,13 +64,22 @@ const styles = StyleSheet.create({
   iconButton: {
     padding: Spacing.one,
   },
-  title: {
+  centerBlock: {
     flex: 1,
+    alignItems: 'center',
+    marginHorizontal: Spacing.two,
+  },
+  title: {
     fontSize: 18,
     fontWeight: '600',
     color: Colors.light.text,
     textAlign: 'center',
-    marginHorizontal: Spacing.two,
+  },
+  date: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 2,
+    textAlign: 'center',
   },
   rightButtons: {
     flexDirection: 'row',

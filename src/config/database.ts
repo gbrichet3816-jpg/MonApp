@@ -22,14 +22,9 @@ export function initDatabase() {
       time TEXT NOT NULL,
       notification_id TEXT,
       active INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS reminder_responses (
-      id TEXT PRIMARY KEY NOT NULL,
-      reminder_id TEXT NOT NULL,
-      response TEXT NOT NULL,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      last_fired_at INTEGER,
+      response TEXT
     );
 
     CREATE TABLE IF NOT EXISTS documents (
@@ -118,6 +113,8 @@ export function loadReminders(agentId: string) {
     notification_id: string;
     active: number;
     created_at: number;
+    last_fired_at: number | null;
+    response: string | null;
   }>('SELECT * FROM reminders WHERE agent_id = ? AND active = 1', [agentId]);
 }
 
@@ -129,28 +126,40 @@ export function clearReminders(agentId: string) {
   db.runSync('DELETE FROM reminders WHERE agent_id = ?', [agentId]);
 }
 
-export function saveReminderResponse({
-  reminderId,
-  response,
-}: {
-  reminderId: string;
-  response: string;
-}) {
-  db.runSync(
-    'INSERT INTO reminder_responses (id, reminder_id, response, created_at) VALUES (?, ?, ?, ?)',
-    [`${reminderId}-${Date.now()}`, reminderId, response, Date.now()],
-  );
+// Marque un rappel comme "déclenché" (la notification a été envoyée)
+export function markReminderFired(id: string) {
+  db.runSync('UPDATE reminders SET last_fired_at = ? WHERE id = ?', [Date.now(), id]);
 }
 
-export function loadReminderResponses(reminderId: string) {
+// Enregistre la réponse de l'utilisateur à un rappel
+export function setReminderResponse(id: string, response: string) {
+  db.runSync('UPDATE reminders SET response = ? WHERE id = ?', [response, id]);
+}
+
+// Trouve TOUS les rappels déclenchés sans réponse (12 dernières heures)
+export function findAllPendingReminders(agentId: string) {
+  const twelveHoursAgo = Date.now() - 12 * 60 * 60 * 1000;
+
   return db.getAllSync<{
     id: string;
-    reminder_id: string;
-    response: string;
+    agent_id: string;
+    medication_name: string;
+    time: string;
+    notification_id: string;
+    active: number;
     created_at: number;
-  }>('SELECT * FROM reminder_responses WHERE reminder_id = ? ORDER BY created_at DESC', [
-    reminderId,
-  ]);
+    last_fired_at: number | null;
+    response: string | null;
+  }>(
+    `SELECT * FROM reminders 
+     WHERE agent_id = ? 
+       AND active = 1 
+       AND last_fired_at IS NOT NULL 
+       AND last_fired_at > ?
+       AND response IS NULL
+     ORDER BY last_fired_at ASC`,
+    [agentId, twelveHoursAgo],
+  );
 }
 
 export type Document = {
