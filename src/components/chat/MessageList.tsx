@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
@@ -16,6 +17,17 @@ type Props = {
 };
 
 export default function MessageList({ messages, emptyText }: Props) {
+  const listRef = useRef<FlatList<ChatMessage>>(null);
+
+  // Scroll automatique vers le bas quand un nouveau message arrive
+  useEffect(() => {
+    if (messages.length > 0) {
+      setTimeout(() => {
+        listRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    }
+  }, [messages.length]);
+
   if (messages.length === 0) {
     return (
       <View style={styles.emptyContainer}>
@@ -26,10 +38,14 @@ export default function MessageList({ messages, emptyText }: Props) {
 
   return (
     <FlatList
+      ref={listRef}
       data={messages}
       keyExtractor={(item) => item.id}
       renderItem={({ item }) => <Message text={item.text} isUser={item.isUser} />}
       contentContainerStyle={styles.listContent}
+      onContentSizeChange={() => {
+        listRef.current?.scrollToEnd({ animated: true });
+      }}
     />
   );
 }
