@@ -13,12 +13,13 @@ import MessageList, { ChatMessage } from '@/components/chat/MessageList';
 import AgentMenu from '@/components/common/AgentMenu';
 import Header from '@/components/common/Header';
 import SettingsModal from '@/components/common/SettingsModal';
-import { sendMessageToAgent } from '@/config/api';
+import { sendMessageToAgent, ToolCall } from '@/config/api';
 import {
   findRemindersToAsk,
   initDatabase,
   loadMessages,
   markRemindersAsAsked,
+  saveDocument,
   saveMessage,
   saveReminder,
   setReminderResponse,
@@ -75,7 +76,6 @@ export default function HomeScreen() {
       isUser: false,
     }));
 
-    // Marque tous ces rappels comme "question posée"
     markRemindersAsAsked(remindersToAsk.map((r) => r.id));
 
     setMessages((prev) => {
@@ -95,6 +95,32 @@ export default function HomeScreen() {
 
       return [...prev, ...newQuestions];
     });
+  };
+
+  const handleToolCalls = async (
+    toolCalls: ToolCall[],
+    agentId: string,
+  ): Promise<ChatMessage | null> => {
+    for (const call of toolCalls) {
+      if (call.name === 'createDocument') {
+        const args = call.arguments as { title: string; content: string };
+
+        const docId = `doc-${Date.now()}`;
+        saveDocument({
+          id: docId,
+          agentId,
+          title: args.title,
+          content: args.content,
+        });
+
+        return {
+          id: `agent-${Date.now()}`,
+          text: `C'est fait ! J'ai créé "${args.title}" dans ta bibliothèque.`,
+          isUser: false,
+        };
+      }
+    }
+    return null;
   };
 
   const selectedAgent = AGENTS.find((a) => a.id === selectedAgentId);
@@ -118,15 +144,11 @@ export default function HomeScreen() {
       isUser: true,
     });
 
-    // Si on est en train de répondre à un rappel en attente
     if (selectedAgent.id === 'sante') {
       const remindersToAsk = findRemindersToAsk('sante');
-      // Cherche un rappel déjà "questionné" mais sans réponse
-      const allReminders = remindersToAsk.length > 0 ? remindersToAsk : [];
-      // On regarde plutôt tous les rappels actifs sans réponse
-      if (allReminders.length > 0) {
+      if (remindersToAsk.length > 0) {
         const lower = text.toLowerCase();
-        const first = allReminders[0];
+        const first = remindersToAsk[0];
         if (lower.includes('oui') || lower.includes('pris')) {
           setReminderResponse(first.id, 'taken');
         } else if (lower.includes('non') || lower.includes('pas')) {
@@ -137,7 +159,6 @@ export default function HomeScreen() {
       }
     }
 
-    // Détection de création de rappel
     if (selectedAgent.id === 'sante') {
       const time = parseTimeFromMessage(text);
       const medication = parseMedicationFromMessage(text);
@@ -191,26 +212,57 @@ export default function HomeScreen() {
         content: m.text,
       }));
 
-      const reply = await sendMessageToAgent({
+      const result = await sendMessageToAgent({
         messages: apiMessages,
         agentSystemPrompt: selectedAgent.systemPrompt,
+        enableTools: (selectedAgent as any).enableTools === true,
       });
 
       if (!isMounted.current) return;
 
-      const agentMessage: ChatMessage = {
-        id: `agent-${Date.now()}`,
-        text: reply,
-        isUser: false,
-      };
-      setMessages((prev) => [...prev, agentMessage]);
+      // Si l'agent veut créer un document
+      if (result.toolCalls && result.toolCalls.length > 0) {
+        const toolMessage = await handleToolCalls(result.toolCalls, selectedAgent.id);
+        if (toolMessage) {
+          setMessages((prev) => [...prev, toolMessage]);
+          saveMessage({
+            id: toolMessage.id,
+            agentId: selectedAgent.id,
+            text: toolMessage.text,
+            isUser: false,
+          });
+        }
 
-      saveMessage({
-        id: agentMessage.id,
-        agentId: selectedAgent.id,
-        text: agentMessage.text,
-        isUser: false,
-      });
+        // S'il y a aussi un texte avec le tool call, on l'affiche
+        if (result.reply) {
+          const replyMessage: ChatMessage = {
+            id: `agent-reply-${Date.now()}`,
+            text: result.reply,
+            isUser: false,
+          };
+          setMessages((prev) => [...prev, replyMessage]);
+          saveMessage({
+            id: replyMessage.id,
+            agentId: selectedAgent.id,
+            text: replyMessage.text,
+            isUser: false,
+          });
+        }
+      } else {
+        const agentMessage: ChatMessage = {
+          id: `agent-${Date.now()}`,
+          text: result.reply,
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, agentMessage]);
+
+        saveMessage({
+          id: agentMessage.id,
+          agentId: selectedAgent.id,
+          text: agentMessage.text,
+          isUser: false,
+        });
+      }
     } catch (error) {
       if (!isMounted.current) return;
 

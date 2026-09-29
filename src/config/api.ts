@@ -1,14 +1,25 @@
-// URL du serveur Railway
 export const API_URL = 'https://monapp-server-production.up.railway.app';
 
-// Fonction pour envoyer un message à un agent
+export type ToolCall = {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
+export type AgentReply = {
+  reply: string;
+  toolCalls?: ToolCall[];
+};
+
 export async function sendMessageToAgent({
   messages,
   agentSystemPrompt,
+  enableTools = false,
 }: {
   messages: { role: 'user' | 'assistant'; content: string }[];
   agentSystemPrompt?: string;
-}) {
+  enableTools?: boolean;
+}): Promise<AgentReply> {
   const response = await fetch(`${API_URL}/chat`, {
     method: 'POST',
     headers: {
@@ -17,6 +28,7 @@ export async function sendMessageToAgent({
     body: JSON.stringify({
       messages,
       agentSystemPrompt,
+      enableTools,
     }),
   });
 
@@ -26,5 +38,9 @@ export async function sendMessageToAgent({
   }
 
   const data = await response.json();
-  return data.reply as string;
+
+  return {
+    reply: data.reply || '',
+    toolCalls: data.toolCalls,
+  };
 }

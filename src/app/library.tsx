@@ -2,16 +2,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
-    Alert,
-    FlatList,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  FlatList,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { deleteDocument, Document, loadDocuments } from '@/config/database';
+import { printPdf, sharePdf } from '@/config/pdf';
 import { Colors, Spacing } from '@/constants/theme';
 
 export default function LibraryScreen() {
@@ -38,11 +39,34 @@ export default function LibraryScreen() {
           style: 'destructive',
           onPress: () => {
             deleteDocument(doc.id);
+            setSelectedDoc(null);
             loadAll();
           },
         },
       ],
     );
+  };
+
+  const handlePrint = async (doc: Document) => {
+    const success = await printPdf({
+      title: doc.title,
+      content: doc.content,
+      agentId: doc.agentId,
+    });
+    if (!success) {
+      Alert.alert('Erreur', "Impossible d'ouvrir le lecteur d'impression.");
+    }
+  };
+
+  const handleShare = async (doc: Document) => {
+    const success = await sharePdf({
+      title: doc.title,
+      content: doc.content,
+      agentId: doc.agentId,
+    });
+    if (!success) {
+      Alert.alert('Erreur', 'Impossible de partager le document.');
+    }
   };
 
   const formatDate = (timestamp: number) => {
@@ -83,6 +107,24 @@ export default function LibraryScreen() {
             </View>
           )}
         />
+
+        <View style={styles.actionBar}>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => handlePrint(selectedDoc)}
+          >
+            <Ionicons name="print-outline" size={22} color={Colors.light.background} />
+            <Text style={styles.actionButtonText}>Imprimer</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => handleShare(selectedDoc)}
+          >
+            <Ionicons name="share-outline" size={22} color={Colors.light.background} />
+            <Text style={styles.actionButtonText}>Partager</Text>
+          </TouchableOpacity>
+        </View>
       </SafeAreaView>
     );
   }
@@ -221,5 +263,27 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 24,
     color: Colors.light.text,
+  },
+  actionBar: {
+    flexDirection: 'row',
+    padding: Spacing.three,
+    gap: Spacing.two,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+  },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.light.primary,
+    paddingVertical: Spacing.three,
+    borderRadius: Spacing.two,
+    gap: Spacing.two,
+  },
+  actionButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.light.background,
   },
 });
