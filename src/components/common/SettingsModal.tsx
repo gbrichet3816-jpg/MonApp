@@ -28,22 +28,30 @@ export default function SettingsModal({ visible, onClose }: Props) {
   const testPermission = async () => {
     const granted = await requestNotificationPermission();
     if (granted) {
-      // Demande aussi la permission pour les alarmes exactes (Android 12+)
-      try {
-        const { requestExactAlarmPermission } = require('expo-exact-alarms-permission');
-        requestExactAlarmPermission();
-        Alert.alert(
-          'Permission accordée',
-          'Les notifications sont autorisées. Si une page de paramètres Android s\'ouvre, active "Alarmes et rappels".',
-        );
-      } catch (e) {
-        Alert.alert('Permission accordée', 'Les notifications sont autorisées.');
-      }
+      Alert.alert('Permission accordée', 'Les notifications sont autorisées.');
     } else {
       Alert.alert(
         'Permission refusée',
         'Les notifications ne sont pas disponibles dans Expo Go. Il faudra un Development Build.',
       );
+    }
+  };
+
+  const requestExactAlarm = async () => {
+    if (!isNotificationsAvailable()) {
+      Alert.alert('Development Build requis', 'Disponible uniquement en Development Build.');
+      return;
+    }
+
+    try {
+      const { requestExactAlarmPermission } = require('expo-exact-alarms-permission');
+      requestExactAlarmPermission();
+      Alert.alert(
+        'Paramètres ouverts',
+        'Active "Alarmes et rappels" pour MonApp, puis reviens dans l\'appli.',
+      );
+    } catch (e) {
+      Alert.alert('Erreur', 'Impossible d\'ouvrir les paramètres.');
     }
   };
 
@@ -107,6 +115,10 @@ export default function SettingsModal({ visible, onClose }: Props) {
 
               <TouchableOpacity style={styles.button} onPress={testPermission}>
                 <Text style={styles.buttonText}>Demander la permission</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.button} onPress={requestExactAlarm}>
+                <Text style={styles.buttonText}>Autoriser les alarmes exactes</Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.button} onPress={testNotificationIn5Seconds}>

@@ -1,17 +1,46 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useState } from 'react';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
+import { speakText, stopSpeaking } from '@/config/speech';
 import { Colors, Spacing } from '@/constants/theme';
 
 type Props = {
   text: string;
   isUser: boolean;
+  autoSpeak?: boolean;
 };
 
-export default function Message({ text, isUser }: Props) {
+export default function Message({ text, isUser, autoSpeak = false }: Props) {
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const handleSpeak = () => {
+    if (isPlaying) {
+      stopSpeaking();
+      setIsPlaying(false);
+      return;
+    }
+
+    setIsPlaying(true);
+    speakText(text, () => {
+      setIsPlaying(false);
+    });
+  };
+
   return (
     <View style={[styles.container, isUser ? styles.userContainer : styles.agentContainer]}>
       <View style={[styles.bubble, isUser ? styles.userBubble : styles.agentBubble]}>
         <Text style={[styles.text, isUser ? styles.userText : styles.agentText]}>{text}</Text>
+
+        {!isUser && (
+          <TouchableOpacity style={styles.speakButton} onPress={handleSpeak}>
+            <Ionicons
+              name={isPlaying ? 'stop-circle-outline' : 'volume-medium-outline'}
+              size={20}
+              color={Colors.light.primary}
+            />
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -52,5 +81,9 @@ const styles = StyleSheet.create({
   },
   agentText: {
     color: Colors.light.text,
+  },
+  speakButton: {
+    marginTop: Spacing.two,
+    alignSelf: 'flex-start',
   },
 });

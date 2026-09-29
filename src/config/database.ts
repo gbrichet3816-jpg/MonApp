@@ -31,6 +31,17 @@ export function initDatabase() {
       response TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS documents (
+      id TEXT PRIMARY KEY NOT NULL,
+      agent_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_documents_agent
+      ON documents (agent_id, created_at);
   `);
 }
 
@@ -140,4 +151,51 @@ export function loadReminderResponses(reminderId: string) {
   }>('SELECT * FROM reminder_responses WHERE reminder_id = ? ORDER BY created_at DESC', [
     reminderId,
   ]);
+}
+
+export type Document = {
+  id: string;
+  agentId: string;
+  title: string;
+  content: string;
+  createdAt: number;
+};
+
+export function saveDocument({
+  id,
+  agentId,
+  title,
+  content,
+}: {
+  id: string;
+  agentId: string;
+  title: string;
+  content: string;
+}) {
+  db.runSync(
+    'INSERT OR REPLACE INTO documents (id, agent_id, title, content, created_at) VALUES (?, ?, ?, ?, ?)',
+    [id, agentId, title, content, Date.now()],
+  );
+}
+
+export function loadDocuments(): Document[] {
+  const rows = db.getAllSync<{
+    id: string;
+    agent_id: string;
+    title: string;
+    content: string;
+    created_at: number;
+  }>('SELECT * FROM documents ORDER BY created_at DESC');
+
+  return rows.map((row) => ({
+    id: row.id,
+    agentId: row.agent_id,
+    title: row.title,
+    content: row.content,
+    createdAt: row.created_at,
+  }));
+}
+
+export function deleteDocument(id: string) {
+  db.runSync('DELETE FROM documents WHERE id = ?', [id]);
 }
