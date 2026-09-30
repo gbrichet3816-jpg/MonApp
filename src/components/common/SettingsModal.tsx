@@ -1,3 +1,5 @@
+import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { useState } from 'react';
 import {
   Alert,
@@ -15,6 +17,7 @@ import {
   requestNotificationPermission,
   scheduleNotification,
 } from '@/config/notifications';
+import { getLocalProfile } from '@/config/user';
 import { Colors, Spacing } from '@/constants/theme';
 
 type Props = {
@@ -24,6 +27,7 @@ type Props = {
 
 export default function SettingsModal({ visible, onClose }: Props) {
   const [notifCount, setNotifCount] = useState<number | null>(null);
+  const profile = getLocalProfile();
 
   const testPermission = async () => {
     const granted = await requestNotificationPermission();
@@ -59,7 +63,7 @@ export default function SettingsModal({ visible, onClose }: Props) {
     if (!isNotificationsAvailable()) {
       Alert.alert(
         'Development Build requis',
-        "Les notifications ne fonctionnent pas dans Expo Go. Il faudra créer un Development Build pour les tester.",
+        "Les notifications ne fonctionnent pas dans Expo Go.",
       );
       return;
     }
@@ -97,6 +101,13 @@ export default function SettingsModal({ visible, onClose }: Props) {
     );
   };
 
+  const goToNetwork = () => {
+    onClose();
+    setTimeout(() => {
+      router.push('/network');
+    }, 300);
+  };
+
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.overlay}>
@@ -105,9 +116,28 @@ export default function SettingsModal({ visible, onClose }: Props) {
 
           <ScrollView style={styles.content}>
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Connexion</Text>
-              <Text style={styles.rowLabel}>Statut serveur</Text>
-              <Text style={styles.rowValue}>Connecté à Railway</Text>
+              <Text style={styles.sectionTitle}>Mon profil</Text>
+              {profile ? (
+                <>
+                  <Text style={styles.rowLabel}>Prénom</Text>
+                  <Text style={styles.rowValue}>{profile.firstName}</Text>
+                  <Text style={styles.rowLabel}>Code</Text>
+                  <Text style={styles.rowValue}>{profile.code}</Text>
+                </>
+              ) : (
+                <Text style={styles.rowValue}>Non configuré</Text>
+              )}
+            </View>
+
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Réseau</Text>
+              <TouchableOpacity style={styles.button} onPress={goToNetwork}>
+                <View style={styles.buttonRow}>
+                  <Ionicons name="people-outline" size={20} color={Colors.light.primary} />
+                  <Text style={styles.buttonText}>Mon réseau</Text>
+                  <Ionicons name="chevron-forward" size={18} color={Colors.light.primary} />
+                </View>
+              </TouchableOpacity>
             </View>
 
             <View style={styles.section}>
@@ -204,7 +234,13 @@ const styles = StyleSheet.create({
     borderRadius: Spacing.two,
     marginBottom: Spacing.two,
   },
+  buttonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
   buttonText: {
+    flex: 1,
     fontSize: 15,
     color: Colors.light.primary,
     fontWeight: '600',
