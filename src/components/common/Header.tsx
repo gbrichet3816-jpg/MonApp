@@ -37,13 +37,20 @@ export default function Header({ agentName, onOpenAgents, onOpenSettings }: Prop
       <View style={styles.rightButtons}>
         <TouchableOpacity
           style={styles.iconButton}
+          onPress={() => router.push('/network')}
+        >
+          <Ionicons name="people-outline" size={22} color={Colors.light.primary} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.iconButton}
           onPress={() => router.push('/library')}
         >
           <Ionicons name="book-outline" size={22} color={Colors.light.primary} />
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.iconButton} onPress={onOpenSettings}>
-          <Ionicons name="settings-outline" size={24} color={Colors.light.primary} />
+          <Ionicons name="settings-outline" size={22} color={Colors.light.primary} />
         </TouchableOpacity>
       </View>
     </View>
@@ -84,6 +91,6 @@ const styles = StyleSheet.create({
   rightButtons: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.two,
+    gap: Spacing.one,
   },
 });

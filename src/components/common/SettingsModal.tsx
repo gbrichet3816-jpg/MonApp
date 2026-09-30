@@ -1,5 +1,3 @@
-import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
 import { useState } from 'react';
 import {
   Alert,
@@ -36,7 +34,7 @@ export default function SettingsModal({ visible, onClose }: Props) {
     } else {
       Alert.alert(
         'Permission refusée',
-        'Les notifications ne sont pas disponibles dans Expo Go. Il faudra un Development Build.',
+        'Les notifications ne sont pas disponibles dans Expo Go.',
       );
     }
   };
@@ -101,13 +99,6 @@ export default function SettingsModal({ visible, onClose }: Props) {
     );
   };
 
-  const goToNetwork = () => {
-    onClose();
-    setTimeout(() => {
-      router.push('/network');
-    }, 300);
-  };
-
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.overlay}>
@@ -127,17 +118,6 @@ export default function SettingsModal({ visible, onClose }: Props) {
               ) : (
                 <Text style={styles.rowValue}>Non configuré</Text>
               )}
-            </View>
-
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Réseau</Text>
-              <TouchableOpacity style={styles.button} onPress={goToNetwork}>
-                <View style={styles.buttonRow}>
-                  <Ionicons name="people-outline" size={20} color={Colors.light.primary} />
-                  <Text style={styles.buttonText}>Mon réseau</Text>
-                  <Ionicons name="chevron-forward" size={18} color={Colors.light.primary} />
-                </View>
-              </TouchableOpacity>
             </View>
 
             <View style={styles.section}>
@@ -234,13 +214,7 @@ const styles = StyleSheet.create({
     borderRadius: Spacing.two,
     marginBottom: Spacing.two,
   },
-  buttonRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-  },
   buttonText: {
-    flex: 1,
     fontSize: 15,
     color: Colors.light.primary,
     fontWeight: '600',
