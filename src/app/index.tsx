@@ -12,6 +12,7 @@ import InputBar from '@/components/chat/InputBar';
 import MessageList, { ChatMessage } from '@/components/chat/MessageList';
 import AgentMenu from '@/components/common/AgentMenu';
 import Header from '@/components/common/Header';
+import Onboarding from '@/components/common/Onboarding';
 import SettingsModal from '@/components/common/SettingsModal';
 import { sendMessageToAgent, ToolCall } from '@/config/api';
 import {
@@ -25,6 +26,7 @@ import {
   setReminderResponse,
 } from '@/config/database';
 import { requestNotificationPermission } from '@/config/notifications';
+import { getLocalProfile } from '@/config/user';
 import { Colors } from '@/constants/theme';
 
 export default function HomeScreen() {
@@ -33,12 +35,20 @@ export default function HomeScreen() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
+  const [profileReady, setProfileReady] = useState(false);
   const isMounted = useRef(true);
 
   useEffect(() => {
     isMounted.current = true;
     initDatabase();
     requestNotificationPermission();
+
+    const profile = getLocalProfile();
+    if (!profile) {
+      setNeedsOnboarding(true);
+    }
+    setProfileReady(true);
 
     return () => {
       isMounted.current = false;
@@ -220,7 +230,6 @@ export default function HomeScreen() {
 
       if (!isMounted.current) return;
 
-      // Si l'agent veut créer un document
       if (result.toolCalls && result.toolCalls.length > 0) {
         const toolMessage = await handleToolCalls(result.toolCalls, selectedAgent.id);
         if (toolMessage) {
@@ -233,7 +242,6 @@ export default function HomeScreen() {
           });
         }
 
-        // S'il y a aussi un texte avec le tool call, on l'affiche
         if (result.reply) {
           const replyMessage: ChatMessage = {
             id: `agent-reply-${Date.now()}`,
@@ -282,6 +290,14 @@ export default function HomeScreen() {
   const emptyText = selectedAgent
     ? `Conversation avec ${selectedAgent.name}. Écris ton premier message !`
     : 'Sélectionne un agent dans le menu pour commencer.';
+
+  if (!profileReady) {
+    return null;
+  }
+
+  if (needsOnboarding) {
+    return <Onboarding onComplete={() => setNeedsOnboarding(false)} />;
+  }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>

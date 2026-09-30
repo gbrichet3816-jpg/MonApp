@@ -1,5 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
+import { initUserTable } from './user';
+
 const db = SQLite.openDatabaseSync('monapp.db');
 
 export function initDatabase() {
@@ -38,6 +40,8 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_documents_agent
       ON documents (agent_id, created_at);
   `);
+
+  initUserTable();
 }
 
 export function saveMessage({
@@ -126,18 +130,14 @@ export function clearReminders(agentId: string) {
   db.runSync('DELETE FROM reminders WHERE agent_id = ?', [agentId]);
 }
 
-// Marque un rappel comme "déclenché"
 export function markReminderFired(id: string) {
   db.runSync('UPDATE reminders SET last_fired_at = ? WHERE id = ?', [Date.now(), id]);
 }
 
-// Enregistre la réponse de l'utilisateur
 export function setReminderResponse(id: string, response: string) {
   db.runSync('UPDATE reminders SET response = ? WHERE id = ?', [response, id]);
 }
 
-// Trouve les rappels dont l'heure est passée aujourd'hui ET sans réponse
-// Marque automatiquement ceux qui viennent de "déclencher" (heure passée)
 export function findRemindersToAsk(agentId: string) {
   const now = new Date();
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
@@ -158,12 +158,10 @@ export function findRemindersToAsk(agentId: string) {
     const [h, m] = r.time.split(':').map(Number);
     const reminderMinutes = h * 60 + m;
 
-    // L'heure du rappel est passée aujourd'hui ET il n'a pas encore été demandé
     return reminderMinutes <= currentMinutes && r.last_fired_at === null;
   });
 }
 
-// Marque TOUS ces rappels comme "déclenchés" (question posée)
 export function markRemindersAsAsked(ids: string[]) {
   if (ids.length === 0) return;
   const now = Date.now();
