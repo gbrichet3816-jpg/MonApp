@@ -4,15 +4,23 @@ import { Alert, StyleSheet, TextInput, TouchableOpacity, View } from 'react-nati
 
 import { Colors, Spacing } from '@/constants/theme';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
+import FileImporter, { ImportedFile } from './FileImporter';
 
 type Props = {
   onSend: (text: string) => void;
+  onFilePicked?: (file: ImportedFile) => void;
   disabled?: boolean;
   placeholder?: string;
 };
 
-export default function InputBar({ onSend, disabled = false, placeholder = 'Écris un message...' }: Props) {
+export default function InputBar({
+  onSend,
+  onFilePicked,
+  disabled = false,
+  placeholder = 'Écris un message...',
+}: Props) {
   const [text, setText] = useState('');
+  const [fileImporterVisible, setFileImporterVisible] = useState(false);
 
   const { isListening, error, start, stop, cancel } = useSpeechRecognition({
     onResult: (transcript) => {
@@ -35,14 +43,13 @@ export default function InputBar({ onSend, disabled = false, placeholder = 'Écr
     } catch (e) {
       Alert.alert(
         'Micro non disponible',
-        "La reconnaissance vocale nécessite un Development Build. Elle ne fonctionne pas dans Expo Go.",
+        'La reconnaissance vocale nécessite un Development Build.',
       );
     }
   };
 
   const handleValidate = () => {
     stop();
-    // Le texte est déjà dans le champ, il suffit d'envoyer
     setTimeout(() => handleSend(), 100);
   };
 
@@ -51,10 +58,16 @@ export default function InputBar({ onSend, disabled = false, placeholder = 'Écr
     setText('');
   };
 
+  const handleFileImported = (file: ImportedFile) => {
+    if (onFilePicked) {
+      onFilePicked(file);
+    }
+  };
+
   if (error === 'permission-denied') {
     Alert.alert(
       'Permission refusée',
-      "Autorise le micro dans les paramètres de ton téléphone pour utiliser cette fonctionnalité.",
+      'Autorise le micro dans les paramètres de ton téléphone.',
     );
   }
 
@@ -83,12 +96,21 @@ export default function InputBar({ onSend, disabled = false, placeholder = 'Écr
       ) : (
         <>
           <TouchableOpacity
-            style={[styles.micButton, disabled && styles.micButtonDisabled]}
+            style={[styles.attachButton, disabled && styles.buttonDisabled]}
+            onPress={() => setFileImporterVisible(true)}
+            disabled={disabled}
+          >
+            <Ionicons name="attach" size={20} color={Colors.light.primary} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.micButton, disabled && styles.buttonDisabled]}
             onPress={handleMicPress}
             disabled={disabled}
           >
             <Ionicons name="mic" size={20} color={Colors.light.primary} />
           </TouchableOpacity>
+
           <TouchableOpacity
             style={[styles.sendButton, (!text.trim() || disabled) && styles.sendButtonDisabled]}
             onPress={handleSend}
@@ -98,6 +120,12 @@ export default function InputBar({ onSend, disabled = false, placeholder = 'Écr
           </TouchableOpacity>
         </>
       )}
+
+      <FileImporter
+        visible={fileImporterVisible}
+        onClose={() => setFileImporterVisible(false)}
+        onFilePicked={handleFileImported}
+      />
     </View>
   );
 }
@@ -124,7 +152,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Colors.light.text,
   },
-  micButton: {
+  attachButton: {
     width: 40,
     height: 40,
     borderRadius: 20,
@@ -132,8 +160,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  micButtonDisabled: {
-    opacity: 0.5,
+  micButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.light.backgroundElement,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   sendButton: {
     width: 40,
@@ -145,6 +178,9 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: Colors.light.textSecondary,
+  },
+  buttonDisabled: {
+    opacity: 0.5,
   },
   cancelButton: {
     width: 40,

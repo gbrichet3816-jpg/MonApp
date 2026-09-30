@@ -11,12 +11,24 @@ export type AgentReply = {
   toolCalls?: ToolCall[];
 };
 
+export type MessageContent =
+  | string
+  | (
+      | { type: 'text'; text: string }
+      | { type: 'image_url'; image_url: { url: string } }
+    )[];
+
+export type ApiMessage = {
+  role: 'user' | 'assistant';
+  content: MessageContent;
+};
+
 export async function sendMessageToAgent({
   messages,
   agentSystemPrompt,
   enableTools = false,
 }: {
-  messages: { role: 'user' | 'assistant'; content: string }[];
+  messages: ApiMessage[];
   agentSystemPrompt?: string;
   enableTools?: boolean;
 }): Promise<AgentReply> {

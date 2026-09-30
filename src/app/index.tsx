@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AGENTS } from '@/agents';
@@ -8,13 +8,16 @@ import {
   parseTimeFromMessage,
   scheduleMedicationReminder,
 } from '@/agents/sante/reminders';
+import FileActionMenu, { FileAction } from '@/components/chat/FileActionMenu';
+import { ImportedFile } from '@/components/chat/FileImporter';
 import InputBar from '@/components/chat/InputBar';
 import MessageList, { ChatMessage } from '@/components/chat/MessageList';
 import AgentMenu from '@/components/common/AgentMenu';
 import Header from '@/components/common/Header';
 import Onboarding from '@/components/common/Onboarding';
 import SettingsModal from '@/components/common/SettingsModal';
-import { sendMessageToAgent, ToolCall } from '@/config/api';
+import FriendPicker from '@/components/network/FriendPicker';
+import { ApiMessage, sendMessageToAgent, ToolCall } from '@/config/api';
 import {
   findRemindersToAsk,
   initDatabase,
@@ -26,7 +29,7 @@ import {
   setReminderResponse,
 } from '@/config/database';
 import { requestNotificationPermission } from '@/config/notifications';
-import { getLocalProfile } from '@/config/user';
+import { getLocalProfile, shareDocumentWithFriends } from '@/config/user';
 import { Colors } from '@/constants/theme';
 
 export default function HomeScreen() {
@@ -37,6 +40,9 @@ export default function HomeScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [profileReady, setProfileReady] = useState(false);
+  const [pendingFile, setPendingFile] = useState<ImportedFile | null>(null);
+  const [actionMenuVisible, setActionMenuVisible] = useState(false);
+  const [friendPickerVisible, setFriendPickerVisible] = useState(false);
   const isMounted = useRef(true);
 
   useEffect(() => {
@@ -217,8 +223,8 @@ export default function HomeScreen() {
     setIsLoading(true);
 
     try {
-      const apiMessages = newMessages.map((m) => ({
-        role: m.isUser ? ('user' as const) : ('assistant' as const),
+      const apiMessages: ApiMessage[] = newMessages.map((m) => ({
+        role: m.isUser ? 'user' : 'assistant',
         content: m.text,
       }));
 
@@ -287,13 +293,134 @@ export default function HomeScreen() {
     }
   };
 
+  const handleFilePicked = (file: ImportedFile) => {
+    setPendingFile(file);
+    setActionMenuVisible(true);
+  };
+
+  const handleFileAction = async (action: FileAction) => {
+    setActionMenuVisible(false);
+    if (!pendingFile || !selectedAgent) return;
+
+    if (action === 'analyze') {
+      await handleAnalyzeFile(pendingFile);
+    } else if (action === 'share') {
+      setFriendPickerVisible(true);
+    } else if (action === 'store') {
+      handleStoreFile(pendingFile);
+    }
+  };
+
+  const handleAnalyzeFile = async (file: ImportedFile) => {
+    if (!selectedAgent) return;
+
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      text: `📎 ${file.fileName}`,
+      isUser: true,
+    };
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
+
+    setIsLoading(true);
+
+    try {
+      const content: any =
+        file.base64 && file.type === 'image'
+          ? [
+              { type: 'text', text: `Analyse cette image : ${file.title}` },
+              {
+                type: 'image_url',
+                image_url: { url: `data:${file.mimeType};base64,${file.base64}` },
+              },
+            ]
+          : `[Fichier envoyé : ${file.fileName}]`;
+
+      const apiMessages: ApiMessage[] = [
+        ...newMessages.slice(0, -1).map((m) => ({
+          role: m.isUser ? ('user' as const) : ('assistant' as const),
+          content: m.text,
+        })),
+        { role: 'user', content },
+      ];
+
+      const result = await sendMessageToAgent({
+        messages: apiMessages,
+        agentSystemPrompt: selectedAgent.systemPrompt,
+        enableTools: (selectedAgent as any).enableTools === true,
+      });
+
+      if (!isMounted.current) return;
+
+      const agentMessage: ChatMessage = {
+        id: `agent-${Date.now()}`,
+        text: result.reply || '(pas de réponse)',
+        isUser: false,
+      };
+      setMessages((prev) => [...prev, agentMessage]);
+      saveMessage({
+        id: agentMessage.id,
+        agentId: selectedAgent.id,
+        text: agentMessage.text,
+        isUser: false,
+      });
+    } catch (error) {
+      const errorMessage: ChatMessage = {
+        id: `error-${Date.now()}`,
+        text: `Erreur : ${error instanceof Error ? error.message : 'inconnue'}`,
+        isUser: false,
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      if (isMounted.current) setIsLoading(false);
+      setPendingFile(null);
+    }
+  };
+
+  const handleStoreFile = (file: ImportedFile) => {
+    if (!selectedAgent) return;
+
+    const docId = `doc-file-${Date.now()}`;
+    saveDocument({
+      id: docId,
+      agentId: selectedAgent.id,
+      title: file.title,
+      content: `Fichier : ${file.fileName}\nType : ${file.mimeType}\n\n[Document enregistré depuis un import]`,
+    });
+
+    Alert.alert('Enregistré !', `"${file.title}" est dans ta bibliothèque.`);
+    setPendingFile(null);
+  };
+
+  const handleShareFileToFriends = async (friendCodes: string[]) => {
+    setFriendPickerVisible(false);
+    if (!pendingFile) return;
+
+    const profile = getLocalProfile();
+    if (!profile) return;
+
+    const result = await shareDocumentWithFriends({
+      fromCode: profile.code,
+      toCodes: friendCodes,
+      title: pendingFile.title,
+      content: `Fichier : ${pendingFile.fileName}`,
+      fileData: pendingFile.base64,
+      fileType: pendingFile.mimeType,
+    });
+
+    if (result.success) {
+      Alert.alert('Partagé !', `Fichier envoyé à ${friendCodes.length} ami(s).`);
+    } else {
+      Alert.alert('Erreur', result.error || 'Impossible de partager.');
+    }
+    setPendingFile(null);
+  };
+
   const emptyText = selectedAgent
     ? `Conversation avec ${selectedAgent.name}. Écris ton premier message !`
     : 'Sélectionne un agent dans le menu pour commencer.';
 
-  if (!profileReady) {
-    return null;
-  }
+  if (!profileReady) return null;
 
   if (needsOnboarding) {
     return <Onboarding onComplete={() => setNeedsOnboarding(false)} />;
@@ -312,7 +439,11 @@ export default function HomeScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <MessageList messages={messages} emptyText={emptyText} />
-        <InputBar onSend={handleSend} disabled={!selectedAgent || isLoading} />
+        <InputBar
+          onSend={handleSend}
+          onFilePicked={handleFilePicked}
+          disabled={!selectedAgent || isLoading}
+        />
       </KeyboardAvoidingView>
 
       <AgentMenu
@@ -327,6 +458,26 @@ export default function HomeScreen() {
       />
 
       <SettingsModal visible={settingsVisible} onClose={() => setSettingsVisible(false)} />
+
+      <FileActionMenu
+        visible={actionMenuVisible}
+        fileName={pendingFile?.fileName || ''}
+        onClose={() => {
+          setActionMenuVisible(false);
+          setPendingFile(null);
+        }}
+        onAction={handleFileAction}
+      />
+
+      <FriendPicker
+        visible={friendPickerVisible}
+        onClose={() => {
+          setFriendPickerVisible(false);
+          setPendingFile(null);
+        }}
+        onConfirm={handleShareFileToFriends}
+        confirmLabel="Envoyer"
+      />
     </SafeAreaView>
   );
 }
