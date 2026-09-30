@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useState } from 'react';
 import { Alert, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 
@@ -9,6 +10,7 @@ import FileImporter, { ImportedFile } from './FileImporter';
 type Props = {
   onSend: (text: string) => void;
   onFilePicked?: (file: ImportedFile) => void;
+  onPhotoTaken?: (photoUri: string, base64?: string) => void;
   disabled?: boolean;
   placeholder?: string;
 };
@@ -16,6 +18,7 @@ type Props = {
 export default function InputBar({
   onSend,
   onFilePicked,
+  onPhotoTaken,
   disabled = false,
   placeholder = 'Écris un message...',
 }: Props) {
@@ -64,6 +67,36 @@ export default function InputBar({
     }
   };
 
+  const handlePhotoPress = async () => {
+    if (disabled) return;
+
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert(
+          'Permission refusée',
+          'Autorise la caméra dans les paramètres de ton téléphone.',
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 0.8,
+        base64: true,
+      });
+
+      if (result.canceled || !result.assets[0]) return;
+
+      const asset = result.assets[0];
+      if (onPhotoTaken) {
+        onPhotoTaken(asset.uri, asset.base64 || undefined);
+      }
+    } catch (e) {
+      Alert.alert('Erreur', "Impossible d'ouvrir la caméra.");
+    }
+  };
+
   if (error === 'permission-denied') {
     Alert.alert(
       'Permission refusée',
@@ -73,30 +106,40 @@ export default function InputBar({
 
   return (
     <View style={styles.container}>
-      <TextInput
-        style={styles.input}
-        value={text}
-        onChangeText={setText}
-        placeholder={placeholder}
-        placeholderTextColor={Colors.light.textSecondary}
-        multiline
-        editable={!disabled && !isListening}
-        onSubmitEditing={handleSend}
-      />
+      <View style={styles.inputWrapper}>
+        <TextInput
+          style={styles.input}
+          value={text}
+          onChangeText={setText}
+          placeholder={isListening ? 'Je t\'écoute...' : placeholder}
+          placeholderTextColor={Colors.light.textSecondary}
+          multiline
+          editable={!disabled && !isListening}
+          onSubmitEditing={handleSend}
+        />
+      </View>
 
       {isListening ? (
-        <>
-          <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
-            <Ionicons name="close" size={20} color={Colors.light.background} />
+        <View style={styles.grid}>
+          <TouchableOpacity style={styles.gridButtonRed} onPress={handleCancel}>
+            <Ionicons name="close" size={22} color={Colors.light.background} />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.validateButton} onPress={handleValidate}>
+          <TouchableOpacity style={styles.gridButtonGreen} onPress={handleValidate}>
             <Ionicons name="checkmark" size={22} color={Colors.light.background} />
           </TouchableOpacity>
-        </>
+        </View>
       ) : (
-        <>
+        <View style={styles.grid}>
           <TouchableOpacity
-            style={[styles.attachButton, disabled && styles.buttonDisabled]}
+            style={[styles.gridButton, disabled && styles.buttonDisabled]}
+            onPress={handlePhotoPress}
+            disabled={disabled}
+          >
+            <Ionicons name="camera" size={20} color={Colors.light.primary} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.gridButton, disabled && styles.buttonDisabled]}
             onPress={() => setFileImporterVisible(true)}
             disabled={disabled}
           >
@@ -104,7 +147,7 @@ export default function InputBar({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.micButton, disabled && styles.buttonDisabled]}
+            style={[styles.gridButton, disabled && styles.buttonDisabled]}
             onPress={handleMicPress}
             disabled={disabled}
           >
@@ -112,13 +155,17 @@ export default function InputBar({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.sendButton, (!text.trim() || disabled) && styles.sendButtonDisabled]}
+            style={[
+              styles.gridButton,
+              styles.sendButton,
+              (!text.trim() || disabled) && styles.sendButtonDisabled,
+            ]}
             onPress={handleSend}
             disabled={!text.trim() || disabled}
           >
             <Ionicons name="send" size={20} color={Colors.light.background} />
           </TouchableOpacity>
-        </>
+        </View>
       )}
 
       <FileImporter
@@ -141,61 +188,56 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.light.border,
     gap: Spacing.two,
   },
-  input: {
+  inputWrapper: {
     flex: 1,
-    minHeight: 40,
-    maxHeight: 120,
+  },
+  input: {
+    minHeight: 90,
+    maxHeight: 150,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.two,
     backgroundColor: Colors.light.backgroundElement,
-    borderRadius: Spacing.four,
+    borderRadius: Spacing.two,
     fontSize: 15,
     color: Colors.light.text,
   },
-  attachButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    width: 96,
+    gap: Spacing.two,
+  },
+  gridButton: {
+    width: 44,
+    height: 44,
+    borderRadius: Spacing.two,
     backgroundColor: Colors.light.backgroundElement,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  micButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.light.backgroundElement,
+  gridButtonRed: {
+    width: 44,
+    height: 44,
+    borderRadius: Spacing.two,
+    backgroundColor: Colors.light.error,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  gridButtonGreen: {
+    width: 44,
+    height: 44,
+    borderRadius: Spacing.two,
+    backgroundColor: Colors.light.success,
     justifyContent: 'center',
     alignItems: 'center',
   },
   sendButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
     backgroundColor: Colors.light.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   sendButtonDisabled: {
     backgroundColor: Colors.light.textSecondary,
   },
   buttonDisabled: {
     opacity: 0.5,
-  },
-  cancelButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.light.error,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  validateButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.light.success,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
 });

@@ -80,7 +80,6 @@ export default function LibraryScreen() {
     const profile = getLocalProfile();
     if (!profile) return;
 
-    // Enregistre localement
     const localId = `shared-${doc.id}`;
     saveDocument({
       id: localId,
@@ -89,7 +88,6 @@ export default function LibraryScreen() {
       content: doc.content,
     });
 
-    // Marque côté serveur
     const result = await acceptDocument({
       docId: doc.id,
       userCode: profile.code,
@@ -718,6 +716,7 @@ const styles = StyleSheet.create({
   actionBar: {
     flexDirection: 'row',
     padding: Spacing.three,
+    paddingBottom: Spacing.five,
     gap: Spacing.two,
     borderTopWidth: 1,
     borderTopColor: Colors.light.border,

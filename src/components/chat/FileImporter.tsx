@@ -21,34 +21,6 @@ type Props = {
 };
 
 export default function FileImporter({ visible, onClose, onFilePicked }: Props) {
-  const handleCamera = async () => {
-    try {
-      const permission = await ImagePicker.requestCameraPermissionsAsync();
-      if (!permission.granted) return;
-
-      const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ['images'],
-        quality: 0.8,
-        base64: true,
-      });
-
-      if (result.canceled || !result.assets[0]) return;
-
-      const asset = result.assets[0];
-      onFilePicked({
-        type: 'image',
-        uri: asset.uri,
-        base64: asset.base64 || undefined,
-        mimeType: 'image/jpeg',
-        fileName: `photo_${Date.now()}.jpg`,
-        title: `Photo du ${new Date().toLocaleDateString('fr-FR')}`,
-      });
-      onClose();
-    } catch (e) {
-      console.error('Erreur caméra:', e);
-    }
-  };
-
   const handleGallery = async () => {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -105,11 +77,6 @@ export default function FileImporter({ visible, onClose, onFilePicked }: Props) 
       <View style={styles.overlay}>
         <View style={styles.panel}>
           <Text style={styles.title}>Ajouter un fichier</Text>
-
-          <TouchableOpacity style={styles.option} onPress={handleCamera}>
-            <Ionicons name="camera" size={26} color={Colors.light.primary} />
-            <Text style={styles.optionText}>Prendre une photo</Text>
-          </TouchableOpacity>
 
           <TouchableOpacity style={styles.option} onPress={handleGallery}>
             <Ionicons name="images" size={26} color={Colors.light.primary} />
