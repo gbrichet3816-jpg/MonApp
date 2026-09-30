@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   StyleSheet,
@@ -12,7 +13,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import FriendPicker from '@/components/network/FriendPicker';
-import { deleteDocument, Document, loadDocuments } from '@/config/database';
+import {
+  deleteDocument,
+  Document,
+  loadDocuments,
+  saveDocument,
+} from '@/config/database';
 import {
   printPdf,
   saveMultiplePdfs,
@@ -20,11 +26,29 @@ import {
   shareMultiplePdfs,
   sharePdf,
 } from '@/config/pdf';
-import { getLocalProfile, shareDocumentWithFriends } from '@/config/user';
+import {
+  acceptDocument,
+  fetchPendingDocs,
+  getLocalProfile,
+  refuseDocument,
+  shareDocumentWithFriends,
+} from '@/config/user';
 import { Colors, Spacing } from '@/constants/theme';
+
+type PendingDoc = {
+  id: string;
+  fromCode: string;
+  fromName: string;
+  title: string;
+  content: string;
+  fileType: string | null;
+  sharedAt: number;
+};
 
 export default function LibraryScreen() {
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [pendingDocs, setPendingDocs] = useState<PendingDoc[]>([]);
+  const [isLoadingPending, setIsLoadingPending] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -32,11 +56,81 @@ export default function LibraryScreen() {
 
   useEffect(() => {
     loadAll();
+    loadPending();
   }, []);
 
   const loadAll = () => {
     const docs = loadDocuments();
     setDocuments(docs);
+  };
+
+  const loadPending = async () => {
+    const profile = getLocalProfile();
+    if (!profile) return;
+
+    setIsLoadingPending(true);
+    const result = await fetchPendingDocs(profile.code);
+    if (result.success && result.documents) {
+      setPendingDocs(result.documents);
+    }
+    setIsLoadingPending(false);
+  };
+
+  const handleAccept = async (doc: PendingDoc) => {
+    const profile = getLocalProfile();
+    if (!profile) return;
+
+    // Enregistre localement
+    const localId = `shared-${doc.id}`;
+    saveDocument({
+      id: localId,
+      agentId: doc.fromName || 'ami',
+      title: doc.title,
+      content: doc.content,
+    });
+
+    // Marque côté serveur
+    const result = await acceptDocument({
+      docId: doc.id,
+      userCode: profile.code,
+    });
+
+    if (result.success) {
+      setPendingDocs((prev) => prev.filter((d) => d.id !== doc.id));
+      loadAll();
+      Alert.alert('Ajouté !', `"${doc.title}" est dans ta bibliothèque.`);
+    } else {
+      Alert.alert('Erreur', result.error || 'Impossible d\'accepter.');
+    }
+  };
+
+  const handleRefuse = async (doc: PendingDoc) => {
+    const profile = getLocalProfile();
+    if (!profile) return;
+
+    Alert.alert(
+      'Refuser ce document ?',
+      `"${doc.title}" sera supprimé définitivement.`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Refuser',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await refuseDocument({
+              docId: doc.id,
+              userCode: profile.code,
+            });
+
+            if (result.success) {
+              setPendingDocs((prev) => prev.filter((d) => d.id !== doc.id));
+            } else {
+              Alert.alert('Erreur', result.error);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const toggleSelection = (id: string) => {
@@ -105,46 +199,31 @@ export default function LibraryScreen() {
     const result = await saveMultiplePdfs(docs);
 
     if (result.failed === 0) {
-      Alert.alert(
-        'Enregistré !',
-        `${result.success} document(s) enregistré(s).`,
-      );
+      Alert.alert('Enregistré !', `${result.success} document(s) enregistré(s).`);
     } else {
-      Alert.alert(
-        'Partiellement enregistré',
-        `${result.success} réussi(s), ${result.failed} échoué(s).`,
-      );
+      Alert.alert('Partiellement enregistré', `${result.success} réussi(s), ${result.failed} échoué(s).`);
     }
   };
 
   const handleShareExternal = async () => {
     if (selectedIds.length === 0) return;
 
-    if (selectedIds.length > 1) {
+    const docs = getSelectedDocuments().map((d) => ({
+      title: d.title,
+      content: d.content,
+      agentId: d.agentId,
+    }));
+
+    if (docs.length > 1) {
       Alert.alert(
         'Partage multiple',
-        `${selectedIds.length} documents vont être partagés un par un. Continue ?`,
+        `${docs.length} documents vont être partagés un par un. Continue ?`,
         [
           { text: 'Annuler', style: 'cancel' },
-          {
-            text: 'Continuer',
-            onPress: async () => {
-              const docs = getSelectedDocuments().map((d) => ({
-                title: d.title,
-                content: d.content,
-                agentId: d.agentId,
-              }));
-              await shareMultiplePdfs(docs);
-            },
-          },
+          { text: 'Continuer', onPress: () => shareMultiplePdfs(docs) },
         ],
       );
     } else {
-      const docs = getSelectedDocuments().map((d) => ({
-        title: d.title,
-        content: d.content,
-        agentId: d.agentId,
-      }));
       await shareMultiplePdfs(docs);
     }
   };
@@ -174,11 +253,8 @@ export default function LibraryScreen() {
         title: doc.title,
         content: doc.content,
       });
-      if (result.success) {
-        successCount++;
-      } else {
-        failCount++;
-      }
+      if (result.success) successCount++;
+      else failCount++;
     }
 
     if (failCount === 0) {
@@ -188,10 +264,7 @@ export default function LibraryScreen() {
       );
       exitSelectionMode();
     } else {
-      Alert.alert(
-        'Partiellement partagé',
-        `${successCount} réussi(s), ${failCount} échoué(s).`,
-      );
+      Alert.alert('Partiellement partagé', `${successCount} réussi(s), ${failCount} échoué(s).`);
     }
   };
 
@@ -220,9 +293,7 @@ export default function LibraryScreen() {
       content: doc.content,
       agentId: doc.agentId,
     });
-    if (!success) {
-      Alert.alert('Erreur', "Impossible d'ouvrir le lecteur d'impression.");
-    }
+    if (!success) Alert.alert('Erreur', "Impossible d'imprimer.");
   };
 
   const handleShare = async (doc: Document) => {
@@ -231,9 +302,7 @@ export default function LibraryScreen() {
       content: doc.content,
       agentId: doc.agentId,
     });
-    if (!success) {
-      Alert.alert('Erreur', 'Impossible de partager le document.');
-    }
+    if (!success) Alert.alert('Erreur', 'Impossible de partager.');
   };
 
   const handleSaveSingle = async (doc: Document) => {
@@ -293,15 +362,9 @@ export default function LibraryScreen() {
                     color={isSelected ? Colors.light.primary : Colors.light.textSecondary}
                   />
                 </View>
-                <Ionicons
-                  name="document-text-outline"
-                  size={24}
-                  color={Colors.light.primary}
-                />
+                <Ionicons name="document-text-outline" size={24} color={Colors.light.primary} />
                 <View style={styles.docItemText}>
-                  <Text style={styles.docItemTitle} numberOfLines={1}>
-                    {item.title}
-                  </Text>
+                  <Text style={styles.docItemTitle} numberOfLines={1}>{item.title}</Text>
                   <Text style={styles.docItemMeta}>
                     {formatDate(item.createdAt)} · {item.agentId}
                   </Text>
@@ -364,19 +427,11 @@ export default function LibraryScreen() {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
         <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => setSelectedDoc(null)}
-          >
+          <TouchableOpacity style={styles.iconButton} onPress={() => setSelectedDoc(null)}>
             <Ionicons name="arrow-back" size={24} color={Colors.light.primary} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle} numberOfLines={1}>
-            {selectedDoc.title}
-          </Text>
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => handleDelete(selectedDoc)}
-          >
+          <Text style={styles.headerTitle} numberOfLines={1}>{selectedDoc.title}</Text>
+          <TouchableOpacity style={styles.iconButton} onPress={() => handleDelete(selectedDoc)}>
             <Ionicons name="trash-outline" size={22} color={Colors.light.error} />
           </TouchableOpacity>
         </View>
@@ -395,34 +450,22 @@ export default function LibraryScreen() {
         />
 
         <View style={styles.actionBar}>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={handleShareSingleToFriends}
-          >
+          <TouchableOpacity style={styles.actionButton} onPress={handleShareSingleToFriends}>
             <Ionicons name="people-outline" size={20} color={Colors.light.background} />
             <Text style={styles.actionButtonText}>Amis</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => handleSaveSingle(selectedDoc)}
-          >
+          <TouchableOpacity style={styles.actionButton} onPress={() => handleSaveSingle(selectedDoc)}>
             <Ionicons name="download-outline" size={20} color={Colors.light.background} />
             <Text style={styles.actionButtonText}>Enreg.</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => handlePrint(selectedDoc)}
-          >
+          <TouchableOpacity style={styles.actionButton} onPress={() => handlePrint(selectedDoc)}>
             <Ionicons name="print-outline" size={20} color={Colors.light.background} />
             <Text style={styles.actionButtonText}>Impr.</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => handleShare(selectedDoc)}
-          >
+          <TouchableOpacity style={styles.actionButton} onPress={() => handleShare(selectedDoc)}>
             <Ionicons name="share-outline" size={20} color={Colors.light.background} />
             <Text style={styles.actionButtonText}>Part.</Text>
           </TouchableOpacity>
@@ -450,10 +493,7 @@ export default function LibraryScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Bibliothèque</Text>
         {documents.length > 0 ? (
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => enterSelectionMode()}
-          >
+          <TouchableOpacity style={styles.iconButton} onPress={() => enterSelectionMode()}>
             <Ionicons name="checkbox-outline" size={24} color={Colors.light.primary} />
           </TouchableOpacity>
         ) : (
@@ -461,56 +501,89 @@ export default function LibraryScreen() {
         )}
       </View>
 
-      {documents.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <Ionicons name="book-outline" size={64} color={Colors.light.textSecondary} />
-          <Text style={styles.emptyTitle}>Bibliothèque vide</Text>
-          <Text style={styles.emptyText}>
-            Les documents créés par tes agents apparaîtront ici.
-          </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={documents}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.docItem}
-              onPress={() => handlePress(item)}
-              onLongPress={() => handleLongPress(item)}
-            >
-              <Ionicons
-                name="document-text-outline"
-                size={24}
-                color={Colors.light.primary}
-              />
-              <View style={styles.docItemText}>
-                <Text style={styles.docItemTitle} numberOfLines={1}>
-                  {item.title}
-                </Text>
-                <Text style={styles.docItemMeta}>
-                  {formatDate(item.createdAt)} · {item.agentId}
-                </Text>
+      <FlatList
+        data={documents}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
+        ListHeaderComponent={
+          <>
+            {isLoadingPending && (
+              <View style={styles.pendingLoading}>
+                <ActivityIndicator color={Colors.light.primary} />
               </View>
-              <Ionicons
-                name="chevron-forward"
-                size={20}
-                color={Colors.light.textSecondary}
-              />
-            </TouchableOpacity>
-          )}
-        />
-      )}
+            )}
+
+            {pendingDocs.length > 0 && (
+              <View style={styles.pendingSection}>
+                <Text style={styles.pendingTitle}>
+                  📥 En attente ({pendingDocs.length})
+                </Text>
+                {pendingDocs.map((doc) => (
+                  <View key={doc.id} style={styles.pendingItem}>
+                    <View style={styles.pendingInfo}>
+                      <Text style={styles.pendingItemTitle} numberOfLines={1}>
+                        {doc.title}
+                      </Text>
+                      <Text style={styles.pendingItemMeta}>
+                        De {doc.fromName} · {formatDate(doc.sharedAt)}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.pendingAccept}
+                      onPress={() => handleAccept(doc)}
+                    >
+                      <Ionicons name="checkmark" size={20} color={Colors.light.background} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.pendingRefuse}
+                      onPress={() => handleRefuse(doc)}
+                    >
+                      <Ionicons name="close" size={20} color={Colors.light.background} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {documents.length > 0 && pendingDocs.length > 0 && (
+              <Text style={styles.sectionDivider}>Ma bibliothèque</Text>
+            )}
+          </>
+        }
+        ListEmptyComponent={
+          pendingDocs.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="book-outline" size={64} color={Colors.light.textSecondary} />
+              <Text style={styles.emptyTitle}>Bibliothèque vide</Text>
+              <Text style={styles.emptyText}>
+                Les documents créés par tes agents apparaîtront ici.
+              </Text>
+            </View>
+          ) : null
+        }
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            style={styles.docItem}
+            onPress={() => handlePress(item)}
+            onLongPress={() => handleLongPress(item)}
+          >
+            <Ionicons name="document-text-outline" size={24} color={Colors.light.primary} />
+            <View style={styles.docItemText}>
+              <Text style={styles.docItemTitle} numberOfLines={1}>{item.title}</Text>
+              <Text style={styles.docItemMeta}>
+                {formatDate(item.createdAt)} · {item.agentId}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
+          </TouchableOpacity>
+        )}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: Colors.light.background,
-  },
+  safeArea: { flex: 1, backgroundColor: Colors.light.background },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -520,10 +593,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.light.border,
   },
-  iconButton: {
-    width: 40,
-    alignItems: 'center',
-  },
+  iconButton: { width: 40, alignItems: 'center' },
   headerTitle: {
     flex: 1,
     fontSize: 18,
@@ -531,11 +601,71 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     textAlign: 'center',
   },
+  listContent: { padding: Spacing.three },
+  pendingLoading: { padding: Spacing.three, alignItems: 'center' },
+  pendingSection: {
+    backgroundColor: '#FFF7E6',
+    borderRadius: Spacing.two,
+    padding: Spacing.three,
+    marginBottom: Spacing.three,
+    borderWidth: 1,
+    borderColor: '#FFD580',
+  },
+  pendingTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#B8651B',
+    textTransform: 'uppercase',
+    marginBottom: Spacing.two,
+  },
+  pendingItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.light.background,
+    padding: Spacing.two,
+    borderRadius: Spacing.two,
+    marginBottom: Spacing.two,
+    gap: Spacing.two,
+  },
+  pendingInfo: { flex: 1 },
+  pendingItemTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.light.text,
+  },
+  pendingItemMeta: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginTop: 2,
+  },
+  pendingAccept: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.light.success,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pendingRefuse: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.light.error,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sectionDivider: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.light.primary,
+    textTransform: 'uppercase',
+    marginBottom: Spacing.two,
+  },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: Spacing.four,
+    padding: Spacing.five,
   },
   emptyTitle: {
     fontSize: 20,
@@ -548,9 +678,6 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     textAlign: 'center',
     marginTop: Spacing.two,
-  },
-  listContent: {
-    padding: Spacing.three,
   },
   docItem: {
     flexDirection: 'row',
@@ -565,12 +692,8 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: Colors.light.primary,
   },
-  checkbox: {
-    padding: Spacing.half,
-  },
-  docItemText: {
-    flex: 1,
-  },
+  checkbox: { padding: Spacing.half },
+  docItemText: { flex: 1 },
   docItemTitle: {
     fontSize: 16,
     fontWeight: '600',
@@ -581,9 +704,7 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     marginTop: Spacing.half,
   },
-  docContent: {
-    padding: Spacing.four,
-  },
+  docContent: { padding: Spacing.four },
   docMeta: {
     fontSize: 13,
     color: Colors.light.textSecondary,
@@ -611,9 +732,7 @@ const styles = StyleSheet.create({
     borderRadius: Spacing.two,
     gap: Spacing.half,
   },
-  actionDanger: {
-    backgroundColor: Colors.light.error,
-  },
+  actionDanger: { backgroundColor: Colors.light.error },
   actionButtonText: {
     fontSize: 12,
     fontWeight: '600',

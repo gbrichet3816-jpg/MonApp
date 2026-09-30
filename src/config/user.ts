@@ -251,3 +251,90 @@ export async function shareDocumentWithFriends({
     };
   }
 }
+
+export async function fetchPendingDocs(code: string): Promise<{
+  success: boolean;
+  documents?: {
+    id: string;
+    fromCode: string;
+    fromName: string;
+    title: string;
+    content: string;
+    fileType: string | null;
+    sharedAt: number;
+  }[];
+  error?: string;
+}> {
+  try {
+    const response = await fetch(`${API_URL}/pending-docs/${code}`);
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      return { success: false, error: data.error || 'Erreur serveur' };
+    }
+
+    const data = await response.json();
+    return { success: true, documents: data.documents || [] };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Erreur réseau',
+    };
+  }
+}
+
+export async function acceptDocument({
+  docId,
+  userCode,
+}: {
+  docId: string;
+  userCode: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${API_URL}/accept-doc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docId, userCode }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      return { success: false, error: data.error || 'Erreur acceptation' };
+    }
+
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Erreur réseau',
+    };
+  }
+}
+
+export async function refuseDocument({
+  docId,
+  userCode,
+}: {
+  docId: string;
+  userCode: string;
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${API_URL}/refuse-doc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ docId, userCode }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      return { success: false, error: data.error || 'Erreur refus' };
+    }
+
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Erreur réseau',
+    };
+  }
+}
