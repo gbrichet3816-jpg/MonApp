@@ -1,7 +1,7 @@
+import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 
-// Génère un PDF à partir d'un titre et d'un contenu texte
 export async function generatePdf({
   title,
   content,
@@ -19,7 +19,6 @@ export async function generatePdf({
       year: 'numeric',
     });
 
-    // Convertit les sauts de ligne en <br> pour le HTML
     const contentHtml = content
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -92,7 +91,6 @@ export async function generatePdf({
   }
 }
 
-// Ouvre le PDF dans le lecteur d'impression du téléphone
 export async function printPdf({
   title,
   content,
@@ -182,7 +180,6 @@ export async function printPdf({
   }
 }
 
-// Partage le PDF (email, WhatsApp, Drive…)
 export async function sharePdf({
   title,
   content,
@@ -209,6 +206,104 @@ export async function sharePdf({
     return true;
   } catch (error) {
     console.error('Erreur partage:', error);
+    return false;
+  }
+}
+
+// Enregistre un PDF dans le stockage local du téléphone (Documents)
+export async function savePdfToDevice({
+  title,
+  content,
+  agentId,
+}: {
+  title: string;
+  content: string;
+  agentId?: string;
+}): Promise<{ success: boolean; path?: string }> {
+  try {
+    const uri = await generatePdf({ title, content, agentId });
+    if (!uri) return { success: false };
+
+    // Nettoie le titre pour en faire un nom de fichier
+    const safeTitle = title
+      .replace(/[^a-z0-9]/gi, '_')
+      .replace(/_+/g, '_')
+      .slice(0, 50);
+
+    const timestamp = Date.now();
+    const fileName = `${safeTitle}_${timestamp}.pdf`;
+
+    // Dossier de destination (Documents sur Android)
+        // Dossier de destination (Documents sur Android)
+    const docDir = (FileSystem as any).documentDirectory;
+    if (!docDir) return { success: false };
+
+    const destPath = `${docDir}${fileName}`;
+
+    await (FileSystem as any).copyAsync({
+      from: uri,
+      to: destPath,
+    });
+
+    return { success: true, path: destPath };
+  } catch (error) {
+    console.error('Erreur enregistrement PDF:', error);
+    return { success: false };
+  }
+}
+
+// Enregistre plusieurs PDF d'un coup
+export async function saveMultiplePdfs(
+  documents: { title: string; content: string; agentId: string }[],
+): Promise<{ success: number; failed: number }> {
+  let success = 0;
+  let failed = 0;
+
+  for (const doc of documents) {
+    const result = await savePdfToDevice({
+      title: doc.title,
+      content: doc.content,
+      agentId: doc.agentId,
+    });
+    if (result.success) {
+      success++;
+    } else {
+      failed++;
+    }
+  }
+
+  return { success, failed };
+}
+
+// Partage plusieurs PDF via le menu Android
+export async function shareMultiplePdfs(
+  documents: { title: string; content: string; agentId: string }[],
+): Promise<boolean> {
+  try {
+    if (!(await Sharing.isAvailableAsync())) {
+      return false;
+    }
+
+    // Pour l'instant, on partage un par un
+    // (Android ne supporte pas le partage multiple natif facilement)
+    for (const doc of documents) {
+      const uri = await generatePdf({
+        title: doc.title,
+        content: doc.content,
+        agentId: doc.agentId,
+      });
+      if (!uri) continue;
+
+      await Sharing.shareAsync(uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: `Partager "${doc.title}"`,
+        UTI: 'com.adobe.pdf',
+      });
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Erreur partage multiple:', error);
     return false;
   }
 }

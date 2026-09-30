@@ -11,8 +11,16 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import FriendPicker from '@/components/network/FriendPicker';
 import { deleteDocument, Document, loadDocuments } from '@/config/database';
-import { printPdf, sharePdf } from '@/config/pdf';
+import {
+  printPdf,
+  saveMultiplePdfs,
+  savePdfToDevice,
+  shareMultiplePdfs,
+  sharePdf,
+} from '@/config/pdf';
+import { getLocalProfile, shareDocumentWithFriends } from '@/config/user';
 import { Colors, Spacing } from '@/constants/theme';
 
 export default function LibraryScreen() {
@@ -20,6 +28,7 @@ export default function LibraryScreen() {
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [friendPickerVisible, setFriendPickerVisible] = useState(false);
 
   useEffect(() => {
     loadAll();
@@ -60,6 +69,10 @@ export default function LibraryScreen() {
     }
   };
 
+  const getSelectedDocuments = () => {
+    return documents.filter((d) => selectedIds.includes(d.id));
+  };
+
   const handleDeleteSelected = () => {
     if (selectedIds.length === 0) return;
 
@@ -79,6 +92,107 @@ export default function LibraryScreen() {
         },
       ],
     );
+  };
+
+  const handleSaveSelected = async () => {
+    if (selectedIds.length === 0) return;
+
+    const docs = getSelectedDocuments().map((d) => ({
+      title: d.title,
+      content: d.content,
+      agentId: d.agentId,
+    }));
+    const result = await saveMultiplePdfs(docs);
+
+    if (result.failed === 0) {
+      Alert.alert(
+        'Enregistré !',
+        `${result.success} document(s) enregistré(s).`,
+      );
+    } else {
+      Alert.alert(
+        'Partiellement enregistré',
+        `${result.success} réussi(s), ${result.failed} échoué(s).`,
+      );
+    }
+  };
+
+  const handleShareExternal = async () => {
+    if (selectedIds.length === 0) return;
+
+    if (selectedIds.length > 1) {
+      Alert.alert(
+        'Partage multiple',
+        `${selectedIds.length} documents vont être partagés un par un. Continue ?`,
+        [
+          { text: 'Annuler', style: 'cancel' },
+          {
+            text: 'Continuer',
+            onPress: async () => {
+              const docs = getSelectedDocuments().map((d) => ({
+                title: d.title,
+                content: d.content,
+                agentId: d.agentId,
+              }));
+              await shareMultiplePdfs(docs);
+            },
+          },
+        ],
+      );
+    } else {
+      const docs = getSelectedDocuments().map((d) => ({
+        title: d.title,
+        content: d.content,
+        agentId: d.agentId,
+      }));
+      await shareMultiplePdfs(docs);
+    }
+  };
+
+  const handleShareToFriends = () => {
+    if (selectedIds.length === 0) return;
+    setFriendPickerVisible(true);
+  };
+
+  const handleFriendsSelected = async (friendCodes: string[]) => {
+    setFriendPickerVisible(false);
+
+    const profile = getLocalProfile();
+    if (!profile) {
+      Alert.alert('Erreur', 'Profil introuvable.');
+      return;
+    }
+
+    const docs = getSelectedDocuments();
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const doc of docs) {
+      const result = await shareDocumentWithFriends({
+        fromCode: profile.code,
+        toCodes: friendCodes,
+        title: doc.title,
+        content: doc.content,
+      });
+      if (result.success) {
+        successCount++;
+      } else {
+        failCount++;
+      }
+    }
+
+    if (failCount === 0) {
+      Alert.alert(
+        'Partagé !',
+        `${successCount} document(s) envoyé(s) à ${friendCodes.length} ami(s).`,
+      );
+      exitSelectionMode();
+    } else {
+      Alert.alert(
+        'Partiellement partagé',
+        `${successCount} réussi(s), ${failCount} échoué(s).`,
+      );
+    }
   };
 
   const handleDelete = (doc: Document) => {
@@ -120,6 +234,26 @@ export default function LibraryScreen() {
     if (!success) {
       Alert.alert('Erreur', 'Impossible de partager le document.');
     }
+  };
+
+  const handleSaveSingle = async (doc: Document) => {
+    const result = await savePdfToDevice({
+      title: doc.title,
+      content: doc.content,
+      agentId: doc.agentId,
+    });
+
+    if (result.success) {
+      Alert.alert('Enregistré !', 'Le PDF est enregistré.');
+    } else {
+      Alert.alert('Erreur', "Impossible d'enregistrer.");
+    }
+  };
+
+  const handleShareSingleToFriends = () => {
+    if (!selectedDoc) return;
+    setSelectedIds([selectedDoc.id]);
+    setFriendPickerVisible(true);
   };
 
   const formatDate = (timestamp: number) => {
@@ -179,14 +313,48 @@ export default function LibraryScreen() {
 
         <View style={styles.actionBar}>
           <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleShareToFriends}
+            disabled={selectedIds.length === 0}
+          >
+            <Ionicons name="people-outline" size={20} color={Colors.light.background} />
+            <Text style={styles.actionButtonText}>Amis</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleSaveSelected}
+            disabled={selectedIds.length === 0}
+          >
+            <Ionicons name="download-outline" size={20} color={Colors.light.background} />
+            <Text style={styles.actionButtonText}>Enreg.</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleShareExternal}
+            disabled={selectedIds.length === 0}
+          >
+            <Ionicons name="share-outline" size={20} color={Colors.light.background} />
+            <Text style={styles.actionButtonText}>Partager</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
             style={[styles.actionButton, styles.actionDanger]}
             onPress={handleDeleteSelected}
             disabled={selectedIds.length === 0}
           >
-            <Ionicons name="trash-outline" size={22} color={Colors.light.background} />
-            <Text style={styles.actionButtonText}>Supprimer</Text>
+            <Ionicons name="trash-outline" size={20} color={Colors.light.background} />
+            <Text style={styles.actionButtonText}>Suppr.</Text>
           </TouchableOpacity>
         </View>
+
+        <FriendPicker
+          visible={friendPickerVisible}
+          onClose={() => setFriendPickerVisible(false)}
+          onConfirm={handleFriendsSelected}
+          confirmLabel="Envoyer"
+        />
       </SafeAreaView>
     );
   }
@@ -229,20 +397,46 @@ export default function LibraryScreen() {
         <View style={styles.actionBar}>
           <TouchableOpacity
             style={styles.actionButton}
+            onPress={handleShareSingleToFriends}
+          >
+            <Ionicons name="people-outline" size={20} color={Colors.light.background} />
+            <Text style={styles.actionButtonText}>Amis</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => handleSaveSingle(selectedDoc)}
+          >
+            <Ionicons name="download-outline" size={20} color={Colors.light.background} />
+            <Text style={styles.actionButtonText}>Enreg.</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionButton}
             onPress={() => handlePrint(selectedDoc)}
           >
-            <Ionicons name="print-outline" size={22} color={Colors.light.background} />
-            <Text style={styles.actionButtonText}>Imprimer</Text>
+            <Ionicons name="print-outline" size={20} color={Colors.light.background} />
+            <Text style={styles.actionButtonText}>Impr.</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.actionButton}
             onPress={() => handleShare(selectedDoc)}
           >
-            <Ionicons name="share-outline" size={22} color={Colors.light.background} />
-            <Text style={styles.actionButtonText}>Partager</Text>
+            <Ionicons name="share-outline" size={20} color={Colors.light.background} />
+            <Text style={styles.actionButtonText}>Part.</Text>
           </TouchableOpacity>
         </View>
+
+        <FriendPicker
+          visible={friendPickerVisible}
+          onClose={() => setFriendPickerVisible(false)}
+          onConfirm={async (friendCodes) => {
+            handleFriendsSelected(friendCodes);
+            setSelectedDoc(null);
+          }}
+          confirmLabel="Envoyer"
+        />
       </SafeAreaView>
     );
   }
@@ -415,13 +609,13 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.primary,
     paddingVertical: Spacing.three,
     borderRadius: Spacing.two,
-    gap: Spacing.two,
+    gap: Spacing.half,
   },
   actionDanger: {
     backgroundColor: Colors.light.error,
   },
   actionButtonText: {
-    fontSize: 15,
+    fontSize: 12,
     fontWeight: '600',
     color: Colors.light.background,
   },

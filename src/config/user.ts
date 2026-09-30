@@ -207,3 +207,47 @@ export function loadFriendNicknames(): Record<string, string> {
 export function deleteFriendNickname(friendCode: string) {
   db.runSync('DELETE FROM friend_nicknames WHERE friend_code = ?', [friendCode]);
 }
+
+export async function shareDocumentWithFriends({
+  fromCode,
+  toCodes,
+  title,
+  content,
+  fileData,
+  fileType,
+}: {
+  fromCode: string;
+  toCodes: string[];
+  title: string;
+  content?: string;
+  fileData?: string;
+  fileType?: string;
+}): Promise<{ success: boolean; count?: number; error?: string }> {
+  try {
+    const response = await fetch(`${API_URL}/share-document`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fromCode,
+        toCodes,
+        title,
+        content,
+        fileData,
+        fileType,
+      }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      return { success: false, error: data.error || 'Erreur partage' };
+    }
+
+    const data = await response.json();
+    return { success: true, count: data.documents?.length || 0 };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Erreur réseau',
+    };
+  }
+}
