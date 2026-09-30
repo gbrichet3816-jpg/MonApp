@@ -10,6 +10,12 @@ import {
 } from 'react-native';
 
 import {
+  importBackup,
+  pickBackupFile,
+  shareBackup,
+  wipeAllData
+} from '@/config/backup';
+import {
   getAllScheduledNotifications,
   isNotificationsAvailable,
   requestNotificationPermission,
@@ -25,6 +31,7 @@ type Props = {
 
 export default function SettingsModal({ visible, onClose }: Props) {
   const [notifCount, setNotifCount] = useState<number | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
   const profile = getLocalProfile();
 
   const testPermission = async () => {
@@ -32,26 +39,20 @@ export default function SettingsModal({ visible, onClose }: Props) {
     if (granted) {
       Alert.alert('Permission accordée', 'Les notifications sont autorisées.');
     } else {
-      Alert.alert(
-        'Permission refusée',
-        'Les notifications ne sont pas disponibles dans Expo Go.',
-      );
+      Alert.alert('Permission refusée', 'Les notifications ne sont pas disponibles.');
     }
   };
 
   const requestExactAlarm = async () => {
     if (!isNotificationsAvailable()) {
-      Alert.alert('Development Build requis', 'Disponible uniquement en Development Build.');
+      Alert.alert('Development Build requis', 'Disponible en Development Build uniquement.');
       return;
     }
 
     try {
       const { requestExactAlarmPermission } = require('expo-exact-alarms-permission');
       requestExactAlarmPermission();
-      Alert.alert(
-        'Paramètres ouverts',
-        'Active "Alarmes et rappels" pour MonApp, puis reviens dans l\'appli.',
-      );
+      Alert.alert('Paramètres ouverts', 'Active "Alarmes et rappels" pour l\'appli.');
     } catch (e) {
       Alert.alert('Erreur', 'Impossible d\'ouvrir les paramètres.');
     }
@@ -59,16 +60,13 @@ export default function SettingsModal({ visible, onClose }: Props) {
 
   const testNotificationIn5Seconds = async () => {
     if (!isNotificationsAvailable()) {
-      Alert.alert(
-        'Development Build requis',
-        "Les notifications ne fonctionnent pas dans Expo Go.",
-      );
+      Alert.alert('Development Build requis', 'Non disponible.');
       return;
     }
 
     const granted = await requestNotificationPermission();
     if (!granted) {
-      Alert.alert('Permission requise', "Il faut d'abord autoriser les notifications.");
+      Alert.alert('Permission requise', 'Autorise les notifications d\'abord.');
       return;
     }
 
@@ -79,23 +77,104 @@ export default function SettingsModal({ visible, onClose }: Props) {
         body: 'Si tu vois ce message, tout fonctionne !',
         date,
       });
-      Alert.alert('Notification programmée', 'Tu vas recevoir une notification dans 5 secondes.');
+      Alert.alert('Notification programmée', 'Dans 5 secondes.');
     } catch (e) {
-      Alert.alert('Erreur', 'Impossible de programmer la notification.');
+      Alert.alert('Erreur', 'Impossible de programmer.');
     }
   };
 
   const checkScheduled = async () => {
     if (!isNotificationsAvailable()) {
-      Alert.alert('Development Build requis', 'Disponible uniquement en Development Build.');
+      Alert.alert('Development Build requis', 'Non disponible.');
       return;
     }
 
     const all = await getAllScheduledNotifications();
     setNotifCount(all.length);
+    Alert.alert('Notifications programmées', `${all.length} en attente.`);
+  };
+
+  const handleExport = async () => {
+    if (isProcessing) return;
+    setIsProcessing(true);
+
+    try {
+      const result = await shareBackup();
+      if (!result.success) {
+        Alert.alert('Erreur', result.error || 'Impossible d\'exporter.');
+      }
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleImport = () => {
+    if (isProcessing) return;
+
     Alert.alert(
-      'Notifications programmées',
-      `Il y a ${all.length} notification(s) en attente.`,
+      'Importer une sauvegarde ?',
+      'Toutes les données actuelles seront remplacées par celles du fichier ZIP.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Continuer',
+          onPress: async () => {
+            setIsProcessing(true);
+            try {
+              const pickResult = await pickBackupFile();
+              if (!pickResult.success || !pickResult.filePath) {
+                if (pickResult.error !== 'Annulé') {
+                  Alert.alert('Erreur', pickResult.error || 'Aucun fichier sélectionné.');
+                }
+                return;
+              }
+
+              const result = await importBackup(pickResult.filePath);
+              if (result.success && result.stats) {
+                Alert.alert(
+                  'Restauration réussie !',
+                  `${result.stats.messages} messages\n${result.stats.reminders} rappels\n${result.stats.documents} documents\n${result.stats.hasProfile ? 'Profil restauré' : 'Aucun profil'}`,
+                );
+              } else {
+                Alert.alert('Erreur', result.error || 'Impossible d\'importer.');
+              }
+            } finally {
+              setIsProcessing(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleWipe = () => {
+    Alert.alert(
+      '⚠️ Tout effacer ?',
+      'Cette action est irréversible. Toutes tes conversations, documents, rappels et amis seront supprimés.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'TOUT EFFACER',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Confirmation finale',
+              'Es-tu vraiment sûr ? Cette action ne peut PAS être annulée.',
+              [
+                { text: 'Annuler', style: 'cancel' },
+                {
+                  text: 'Oui, tout effacer',
+                  style: 'destructive',
+                  onPress: () => {
+                    wipeAllData();
+                    Alert.alert('Effacé', 'Toutes les données ont été supprimées.');
+                  },
+                },
+              ],
+            );
+          },
+        },
+      ],
     );
   };
 
@@ -121,6 +200,35 @@ export default function SettingsModal({ visible, onClose }: Props) {
             </View>
 
             <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Sauvegarde</Text>
+
+              <TouchableOpacity
+                style={styles.button}
+                onPress={handleExport}
+                disabled={isProcessing}
+              >
+                <Text style={styles.buttonText}>
+                  {isProcessing ? 'En cours...' : '📤 Exporter mes données (ZIP)'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.button}
+                onPress={handleImport}
+                disabled={isProcessing}
+              >
+                <Text style={styles.buttonText}>
+                  📥 Importer une sauvegarde (ZIP)
+                </Text>
+              </TouchableOpacity>
+
+              <Text style={styles.hint}>
+                L'export crée un fichier ZIP contenant toutes tes conversations,
+                documents et rappels. Conserve-le précieusement (Drive, email…).
+              </Text>
+            </View>
+
+            <View style={styles.section}>
               <Text style={styles.sectionTitle}>Notifications</Text>
 
               <TouchableOpacity style={styles.button} onPress={testPermission}>
@@ -141,9 +249,14 @@ export default function SettingsModal({ visible, onClose }: Props) {
             </View>
 
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Données</Text>
-              <Text style={styles.rowLabel}>Mémoire locale</Text>
-              <Text style={styles.rowValue}>SQLite activé</Text>
+              <Text style={styles.sectionTitle}>Zone dangereuse</Text>
+
+              <TouchableOpacity
+                style={[styles.button, styles.dangerButton]}
+                onPress={handleWipe}
+              >
+                <Text style={styles.dangerText}>🗑️ Effacer toutes mes données</Text>
+              </TouchableOpacity>
             </View>
 
             <View style={styles.section}>
@@ -173,7 +286,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: Spacing.four,
     borderTopRightRadius: Spacing.four,
     padding: Spacing.four,
-    maxHeight: '80%',
+    maxHeight: '85%',
   },
   title: {
     fontSize: 20,
@@ -181,9 +294,7 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     marginBottom: Spacing.three,
   },
-  content: {
-    flexGrow: 0,
-  },
+  content: { flexGrow: 0 },
   section: {
     marginBottom: Spacing.four,
     paddingBottom: Spacing.three,
@@ -207,6 +318,13 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     marginTop: Spacing.half,
   },
+  hint: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    fontStyle: 'italic',
+    marginTop: Spacing.two,
+    lineHeight: 18,
+  },
   button: {
     backgroundColor: Colors.light.backgroundElement,
     paddingVertical: Spacing.three,
@@ -217,6 +335,14 @@ const styles = StyleSheet.create({
   buttonText: {
     fontSize: 15,
     color: Colors.light.primary,
+    fontWeight: '600',
+  },
+  dangerButton: {
+    backgroundColor: '#FFEBEE',
+  },
+  dangerText: {
+    fontSize: 15,
+    color: Colors.light.error,
     fontWeight: '600',
   },
   closeButton: {
