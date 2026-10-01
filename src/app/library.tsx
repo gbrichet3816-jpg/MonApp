@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import DocumentViewer from '@/components/library/DocumentViewer';
 import FriendPicker from '@/components/network/FriendPicker';
 import {
   deleteDocument,
@@ -87,6 +88,7 @@ export default function LibraryScreen() {
       agentId: doc.fromName || 'ami',
       title: doc.title,
       content: doc.content,
+      fileType: doc.fileType || undefined,
     });
 
     const result = await acceptDocument({
@@ -256,7 +258,6 @@ export default function LibraryScreen() {
         toCodes: friendCodes,
         title: doc.title,
         content: doc.content,
-        fileData: undefined,
         fileType: doc.fileType || undefined,
       });
       if (result.success) successCount++;
@@ -432,8 +433,6 @@ export default function LibraryScreen() {
 
   // ===== DÉTAIL D'UN DOCUMENT =====
   if (selectedDoc) {
-    const isImage = selectedDoc.fileType?.startsWith('image/') && selectedDoc.filePath;
-
     return (
       <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
         <View style={styles.header}>
@@ -446,35 +445,18 @@ export default function LibraryScreen() {
           </TouchableOpacity>
         </View>
 
-        <FlatList
-          data={[selectedDoc]}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <View style={styles.docContent}>
-              <Text style={styles.docMeta}>
-                {formatDate(item.createdAt)} · {item.agentId}
-              </Text>
+        <View style={styles.docMetaBar}>
+          <Text style={styles.docMeta}>
+            {formatDate(selectedDoc.createdAt)} · {selectedDoc.agentId}
+            {selectedDoc.fileType ? ` · ${selectedDoc.fileType.split('/').pop()}` : ''}
+          </Text>
+        </View>
 
-              {isImage && (
-                <Image
-                  source={{ uri: item.filePath! }}
-                  style={styles.docFullImage}
-                  resizeMode="contain"
-                />
-              )}
-
-              {item.filePath && !isImage && (
-                <View style={styles.fileInfo}>
-                  <Ionicons name="document" size={32} color={Colors.light.primary} />
-                  <Text style={styles.fileInfoText}>Fichier attaché</Text>
-                </View>
-              )}
-
-              {item.content ? (
-                <Text style={styles.docText}>{item.content}</Text>
-              ) : null}
-            </View>
-          )}
+        <DocumentViewer
+          filePath={selectedDoc.filePath}
+          fileType={selectedDoc.fileType}
+          title={selectedDoc.title}
+          content={selectedDoc.content}
         />
 
         <View style={styles.actionBar}>
@@ -637,6 +619,15 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     textAlign: 'center',
   },
+  docMetaBar: {
+    paddingHorizontal: Spacing.four,
+    paddingVertical: Spacing.two,
+    backgroundColor: Colors.light.backgroundElement,
+  },
+  docMeta: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+  },
   listContent: { padding: Spacing.three },
   pendingLoading: { padding: Spacing.three, alignItems: 'center' },
   pendingSection: {
@@ -745,38 +736,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.light.textSecondary,
     marginTop: Spacing.half,
-  },
-  docContent: { padding: Spacing.four },
-  docMeta: {
-    fontSize: 13,
-    color: Colors.light.textSecondary,
-    marginBottom: Spacing.three,
-  },
-  docFullImage: {
-    width: '100%',
-    height: 300,
-    borderRadius: Spacing.two,
-    backgroundColor: Colors.light.backgroundElement,
-    marginBottom: Spacing.three,
-  },
-  fileInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    padding: Spacing.three,
-    backgroundColor: Colors.light.backgroundElement,
-    borderRadius: Spacing.two,
-    marginBottom: Spacing.three,
-  },
-  fileInfoText: {
-    fontSize: 14,
-    color: Colors.light.textSecondary,
-    fontStyle: 'italic',
-  },
-  docText: {
-    fontSize: 16,
-    lineHeight: 24,
-    color: Colors.light.text,
   },
   actionBar: {
     flexDirection: 'row',
