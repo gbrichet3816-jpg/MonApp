@@ -1,25 +1,21 @@
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as SQLite from 'expo-sqlite';
 import JSZip from 'jszip';
 
 const db = SQLite.openDatabaseSync('monapp.db');
 
-// ===== EXPORT =====
-
 export async function exportBackup(): Promise<{ success: boolean; path?: string; error?: string }> {
   try {
     const zip = new JSZip();
 
-    // 1. Récupère toutes les données SQLite
     const messages = db.getAllSync('SELECT * FROM messages');
     const reminders = db.getAllSync('SELECT * FROM reminders');
     const documents = db.getAllSync('SELECT * FROM documents');
     const userProfile = db.getAllSync('SELECT * FROM user_profile');
     const friendNicknames = db.getAllSync('SELECT * FROM friend_nicknames');
 
-    // 2. Crée un objet JSON avec toutes les données
     const backupData = {
       version: 1,
       exportedAt: Date.now(),
@@ -32,13 +28,10 @@ export async function exportBackup(): Promise<{ success: boolean; path?: string;
       },
     };
 
-    // 3. Ajoute le JSON dans le ZIP
     zip.file('backup.json', JSON.stringify(backupData, null, 2));
 
-    // 4. Génère le ZIP
     const zipContent = await zip.generateAsync({ type: 'base64' });
 
-    // 5. Sauvegarde le ZIP sur le téléphone
     const docDir = (FileSystem as any).documentDirectory;
     if (!docDir) return { success: false, error: 'Dossier introuvable' };
 
@@ -88,8 +81,6 @@ export async function shareBackup(): Promise<{ success: boolean; error?: string 
   }
 }
 
-// ===== IMPORT =====
-
 export async function pickBackupFile(): Promise<{
   success: boolean;
   filePath?: string;
@@ -129,14 +120,12 @@ export async function importBackup(filePath: string): Promise<{
   error?: string;
 }> {
   try {
-    // 1. Lit le fichier ZIP
     const zipContent = await (FileSystem as any).readAsStringAsync(filePath, {
       encoding: 'base64',
     });
 
     const zip = await JSZip.loadAsync(zipContent, { base64: true });
 
-    // 2. Récupère le fichier backup.json
     const backupFile = zip.file('backup.json');
     if (!backupFile) {
       return { success: false, error: 'Fichier de sauvegarde invalide' };
@@ -151,7 +140,6 @@ export async function importBackup(filePath: string): Promise<{
 
     const { messages, reminders, documents, userProfile, friendNicknames } = backupData.data;
 
-    // 3. Efface les données actuelles
     db.execSync(`
       DELETE FROM messages;
       DELETE FROM reminders;
@@ -160,7 +148,6 @@ export async function importBackup(filePath: string): Promise<{
       DELETE FROM friend_nicknames;
     `);
 
-    // 4. Restaure les messages
     if (messages && Array.isArray(messages)) {
       messages.forEach((m: any) => {
         db.runSync(
@@ -170,7 +157,6 @@ export async function importBackup(filePath: string): Promise<{
       });
     }
 
-    // 5. Restaure les rappels
     if (reminders && Array.isArray(reminders)) {
       reminders.forEach((r: any) => {
         db.runSync(
@@ -190,7 +176,6 @@ export async function importBackup(filePath: string): Promise<{
       });
     }
 
-    // 6. Restaure les documents
     if (documents && Array.isArray(documents)) {
       documents.forEach((d: any) => {
         db.runSync(
@@ -200,7 +185,6 @@ export async function importBackup(filePath: string): Promise<{
       });
     }
 
-    // 7. Restaure le profil utilisateur
     if (userProfile && Array.isArray(userProfile) && userProfile.length > 0) {
       const p = userProfile[0];
       db.runSync(
@@ -209,7 +193,6 @@ export async function importBackup(filePath: string): Promise<{
       );
     }
 
-    // 8. Restaure les surnoms
     if (friendNicknames && Array.isArray(friendNicknames)) {
       friendNicknames.forEach((n: any) => {
         db.runSync(
@@ -236,8 +219,6 @@ export async function importBackup(filePath: string): Promise<{
     };
   }
 }
-
-// ===== SUPPRESSION TOTALE =====
 
 export function wipeAllData() {
   db.execSync(`

@@ -1,13 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
 
 export type ImportedFile = {
-  type: 'image' | 'document' | 'pdf';
+  type: 'image' | 'document' | 'pdf' | 'text';
   uri: string;
   base64?: string;
   mimeType: string;
@@ -53,7 +53,7 @@ export default function FileImporter({ visible, onClose, onFilePicked }: Props) 
   const handleDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*', 'text/*', 'audio/*', 'video/*'],
+        type: ['application/pdf', 'image/*', 'text/*', 'application/json'],
         copyToCacheDirectory: true,
       });
 
@@ -61,11 +61,20 @@ export default function FileImporter({ visible, onClose, onFilePicked }: Props) 
 
       const asset = result.assets[0];
       const mimeType = asset.mimeType || 'application/octet-stream';
-      const isPdf = mimeType.includes('pdf');
+      const fileName = asset.name.toLowerCase();
+      const isPdf = mimeType.includes('pdf') || fileName.endsWith('.pdf');
+      const isImage = mimeType.startsWith('image/');
+      const isText =
+        mimeType.startsWith('text/') ||
+        mimeType.includes('json') ||
+        fileName.endsWith('.txt') ||
+        fileName.endsWith('.md') ||
+        fileName.endsWith('.csv') ||
+        fileName.endsWith('.json');
 
-      // Pour les PDF, on lit le base64
       let base64: string | undefined;
-      if (isPdf || mimeType.startsWith('image/')) {
+
+      if (isPdf || isImage || isText) {
         try {
           base64 = await (FileSystem as any).readAsStringAsync(asset.uri, {
             encoding: 'base64',
@@ -75,8 +84,13 @@ export default function FileImporter({ visible, onClose, onFilePicked }: Props) 
         }
       }
 
+      let type: ImportedFile['type'] = 'document';
+      if (isPdf) type = 'pdf';
+      else if (isImage) type = 'image';
+      else if (isText) type = 'text';
+
       onFilePicked({
-        type: isPdf ? 'pdf' : 'document',
+        type,
         uri: asset.uri,
         base64,
         mimeType,
@@ -104,6 +118,10 @@ export default function FileImporter({ visible, onClose, onFilePicked }: Props) 
             <Ionicons name="document" size={26} color={Colors.light.primary} />
             <Text style={styles.optionText}>Choisir un fichier</Text>
           </TouchableOpacity>
+
+          <Text style={styles.hint}>
+            Formats supportés : PDF, images, texte (.txt, .md, .csv, .json)
+          </Text>
 
           <TouchableOpacity style={styles.closeButton} onPress={onClose}>
             <Text style={styles.closeText}>Annuler</Text>
@@ -146,6 +164,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.light.text,
     fontWeight: '500',
+  },
+  hint: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    textAlign: 'center',
+    marginTop: Spacing.two,
+    fontStyle: 'italic',
   },
   closeButton: {
     marginTop: Spacing.two,

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AGENTS } from '@/agents';
@@ -8,11 +8,11 @@ import {
   scheduleMultipleOneTimeReminders,
   scheduleRelativeReminder,
 } from '@/agents/sante/reminders';
-import { ImportedFile } from '@/components/chat/FileImporter';
+import { FileAction, ImportedFile } from '@/components/chat/FileImporter';
 import FileMessageModal from '@/components/chat/FileMessageModal';
 import InputBar from '@/components/chat/InputBar';
 import MessageList, { ChatMessage } from '@/components/chat/MessageList';
-import PhotoMessageModal from '@/components/chat/PhotoMessageModal';
+import PhotoMessageModal, { PhotoAction } from '@/components/chat/PhotoMessageModal';
 import AgentMenu from '@/components/common/AgentMenu';
 import Header from '@/components/common/Header';
 import Onboarding from '@/components/common/Onboarding';
@@ -36,6 +36,24 @@ import { saveFileToDocuments } from '@/config/files';
 import { requestNotificationPermission } from '@/config/notifications';
 import { getLocalProfile } from '@/config/user';
 import { Colors } from '@/constants/theme';
+
+function decodeBase64Utf8(base64: string): string {
+  try {
+    const binaryString = (global as any).atob
+      ? (global as any).atob(base64)
+      : Buffer.from(base64, 'base64').toString('binary');
+
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch (e) {
+    console.error('Erreur décodage base64:', e);
+    return '';
+  }
+}
 
 export default function HomeScreen() {
   const [agentMenuVisible, setAgentMenuVisible] = useState(false);
@@ -407,11 +425,31 @@ export default function HomeScreen() {
     setFileModalVisible(true);
   };
 
-  const handleFileSend = async (message: string, saveToLibrary: boolean) => {
+  const handleFileSend = async (message: string, action: FileAction) => {
     setFileModalVisible(false);
     if (!pendingFile || !selectedAgent) return;
 
-    if (saveToLibrary) {
+    // Cas 1 : Enregistrer seulement
+    if (action === 'save') {
+      const docId = `doc-file-${Date.now()}`;
+      const savedPath = await saveFileToDocuments(pendingFile.uri, pendingFile.fileName);
+
+      saveDocument({
+        id: docId,
+        agentId: selectedAgent.id,
+        title: pendingFile.title,
+        content: '',
+        filePath: savedPath || undefined,
+        fileType: pendingFile.mimeType,
+      });
+
+      Alert.alert('Enregistré !', `"${pendingFile.title}" est dans ta bibliothèque.`);
+      setPendingFile(null);
+      return;
+    }
+
+    // Cas 2 : Envoyer + Enregistrer
+    if (action === 'agent+save') {
       const docId = `doc-file-${Date.now()}`;
       const savedPath = await saveFileToDocuments(pendingFile.uri, pendingFile.fileName);
 
@@ -425,9 +463,17 @@ export default function HomeScreen() {
       });
     }
 
+    // Cas 3 (défaut) : Envoyer à l'agent
     const isImage = pendingFile.type === 'image';
     const isPdf = pendingFile.type === 'pdf';
-    const userText = message || (isImage ? 'Analyse cette image' : isPdf ? 'Analyse ce PDF' : `Fichier : ${pendingFile.fileName}`);
+    const isText = pendingFile.type === 'text';
+
+    const userText = message || (
+      isImage ? 'Analyse cette image' :
+      isPdf ? 'Analyse ce PDF' :
+      isText ? 'Analyse ce document texte' :
+      `Fichier : ${pendingFile.fileName}`
+    );
 
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -458,14 +504,21 @@ export default function HomeScreen() {
           },
         ];
       } else if (isPdf && pendingFile.base64) {
-        // Extraction du texte du PDF via le serveur
         const extractResult = await extractPdfText(pendingFile.base64);
 
         if (extractResult.success && extractResult.text) {
-          const pdfText = extractResult.text.slice(0, 15000); // Limite à 15000 caractères
+          const pdfText = extractResult.text.slice(0, 15000);
           content = `${userText}\n\n--- Contenu du PDF "${pendingFile.fileName}" (${extractResult.pages} pages) ---\n\n${pdfText}`;
         } else {
           content = `${userText}\n\n[Impossible d'extraire le texte du PDF : ${extractResult.error || 'inconnu'}]`;
+        }
+      } else if (isText && pendingFile.base64) {
+        try {
+          const decodedText = decodeBase64Utf8(pendingFile.base64);
+          const textContent = decodedText.slice(0, 15000);
+          content = `${userText}\n\n--- Contenu du fichier "${pendingFile.fileName}" ---\n\n${textContent}`;
+        } catch (e) {
+          content = `${userText}\n\n[Impossible de lire le contenu du fichier : ${e}]`;
         }
       } else if (!isImage) {
         content = `[Fichier : ${pendingFile.fileName}]\n${message || 'Fichier envoyé'}`;
@@ -523,11 +576,32 @@ export default function HomeScreen() {
     setPhotoModalVisible(true);
   };
 
-  const handlePhotoSend = async (message: string, saveToLibrary: boolean) => {
+  const handlePhotoSend = async (message: string, action: PhotoAction) => {
     setPhotoModalVisible(false);
     if (!pendingPhoto || !selectedAgent) return;
 
-    if (saveToLibrary) {
+    // Cas 1 : Enregistrer seulement
+    if (action === 'save') {
+      const docId = `doc-photo-${Date.now()}`;
+      const fileName = `photo_${Date.now()}.jpg`;
+      const savedPath = await saveFileToDocuments(pendingPhoto.uri, fileName);
+
+      saveDocument({
+        id: docId,
+        agentId: selectedAgent.id,
+        title: `Photo du ${new Date().toLocaleDateString('fr-FR')}`,
+        content: '',
+        filePath: savedPath || undefined,
+        fileType: 'image/jpeg',
+      });
+
+      Alert.alert('Enregistré !', 'Photo enregistrée dans ta bibliothèque.');
+      setPendingPhoto(null);
+      return;
+    }
+
+    // Cas 2 : Envoyer + Enregistrer
+    if (action === 'agent+save') {
       const docId = `doc-photo-${Date.now()}`;
       const fileName = `photo_${Date.now()}.jpg`;
       const savedPath = await saveFileToDocuments(pendingPhoto.uri, fileName);
@@ -542,6 +616,7 @@ export default function HomeScreen() {
       });
     }
 
+    // Cas 3 (défaut) : Envoyer à l'agent
     const userText = message || 'Analyse cette image';
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -666,7 +741,6 @@ export default function HomeScreen() {
         visible={fileModalVisible}
         file={pendingFile}
         onSend={handleFileSend}
-        onSendWithoutMessage={(saveToLibrary) => handleFileSend('', saveToLibrary)}
         onCancel={handleFileCancel}
       />
 
@@ -674,7 +748,6 @@ export default function HomeScreen() {
         visible={photoModalVisible}
         photoUri={pendingPhoto?.uri || ''}
         onSend={handlePhotoSend}
-        onSendWithoutMessage={(saveToLibrary) => handlePhotoSend('', saveToLibrary)}
         onCancel={handlePhotoCancel}
       />
     </SafeAreaView>

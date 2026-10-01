@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 
 const DOCUMENTS_DIR = `${(FileSystem as any).documentDirectory}documents/`;
 
@@ -53,5 +53,17 @@ export async function fileExists(filePath: string): Promise<boolean> {
     return info.exists;
   } catch (e) {
     return false;
+  }
+}
+
+export async function readFileAsBase64(filePath: string): Promise<string | null> {
+  try {
+    const base64 = await (FileSystem as any).readAsStringAsync(filePath, {
+      encoding: 'base64',
+    });
+    return base64;
+  } catch (e) {
+    console.error('Erreur lecture base64:', e);
+    return null;
   }
 }

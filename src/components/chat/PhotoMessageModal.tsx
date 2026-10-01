@@ -15,11 +15,12 @@ import {
 import { Colors, Spacing } from '@/constants/theme';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 
+export type PhotoAction = 'agent' | 'agent+save' | 'save';
+
 type Props = {
   visible: boolean;
   photoUri: string;
-  onSend: (message: string, saveToLibrary: boolean) => void;
-  onSendWithoutMessage: (saveToLibrary: boolean) => void;
+  onSend: (message: string, action: PhotoAction) => void;
   onCancel: () => void;
 };
 
@@ -27,11 +28,10 @@ export default function PhotoMessageModal({
   visible,
   photoUri,
   onSend,
-  onSendWithoutMessage,
   onCancel,
 }: Props) {
   const [message, setMessage] = useState('');
-  const [saveToLibrary, setSaveToLibrary] = useState(false);
+  const [action, setAction] = useState<PhotoAction>('agent');
 
   const { isListening, start, stop, cancel } = useSpeechRecognition({
     onResult: (transcript) => {
@@ -39,25 +39,26 @@ export default function PhotoMessageModal({
     },
   });
 
-  const handleSend = () => {
-    if (isListening) stop();
-    onSend(message.trim(), saveToLibrary);
-    setMessage('');
-    setSaveToLibrary(false);
+  const toggleAgentSave = () => {
+    setAction(action === 'agent+save' ? 'agent' : 'agent+save');
   };
 
-  const handleSendWithout = () => {
-    if (isListening) cancel();
-    onSendWithoutMessage(saveToLibrary);
+  const toggleSaveOnly = () => {
+    setAction(action === 'save' ? 'agent' : 'save');
+  };
+
+  const handleSend = () => {
+    if (isListening) stop();
+    onSend(message.trim(), action);
     setMessage('');
-    setSaveToLibrary(false);
+    setAction('agent');
   };
 
   const handleCancel = () => {
     if (isListening) cancel();
     onCancel();
     setMessage('');
-    setSaveToLibrary(false);
+    setAction('agent');
   };
 
   const handleMicPress = async () => {
@@ -71,6 +72,8 @@ export default function PhotoMessageModal({
       // Silencieux
     }
   };
+
+  const showInput = action === 'agent' || action === 'agent+save';
 
   return (
     <Modal
@@ -90,60 +93,75 @@ export default function PhotoMessageModal({
 
           <TouchableOpacity
             style={styles.checkboxRow}
-            onPress={() => setSaveToLibrary(!saveToLibrary)}
+            onPress={toggleAgentSave}
           >
             <Ionicons
-              name={saveToLibrary ? 'checkbox' : 'square-outline'}
+              name={action === 'agent+save' ? 'checkbox' : 'square-outline'}
               size={24}
-              color={saveToLibrary ? Colors.light.primary : Colors.light.textSecondary}
+              color={action === 'agent+save' ? Colors.light.primary : Colors.light.textSecondary}
             />
             <Text style={styles.checkboxLabel}>
-              Enregistrer dans ma bibliothèque
+              Envoyer à l'agent + Enregistrer dans la bibliothèque
             </Text>
-          </TouchableOpacity>
-
-          <Text style={styles.label}>
-            Ajouter un message (optionnel)
-          </Text>
-
-          <View style={styles.inputRow}>
-            <TextInput
-              style={styles.input}
-              value={message}
-              onChangeText={setMessage}
-              placeholder={isListening ? 'Je t\'écoute...' : 'Ex: Analyse cette photo'}
-              placeholderTextColor={Colors.light.textSecondary}
-              multiline
-              editable={!isListening}
-            />
-            <TouchableOpacity
-              style={[styles.micButton, isListening && styles.micButtonActive]}
-              onPress={handleMicPress}
-            >
-              <Ionicons
-                name={isListening ? 'stop' : 'mic'}
-                size={22}
-                color={Colors.light.background}
-              />
-            </TouchableOpacity>
-          </View>
-
-          {isListening && (
-            <Text style={styles.listeningHint}>
-              🎤 Parle, ton message s'écrit tout seul
-            </Text>
-          )}
-
-          <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
-            <Ionicons name="send" size={20} color={Colors.light.background} />
-            <Text style={styles.sendText}>Envoyer</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.sendWithoutButton}
-            onPress={handleSendWithout}
+            style={styles.checkboxRow}
+            onPress={toggleSaveOnly}
           >
-            <Text style={styles.sendWithoutText}>Envoyer sans message</Text>
+            <Ionicons
+              name={action === 'save' ? 'checkbox' : 'square-outline'}
+              size={24}
+              color={action === 'save' ? Colors.light.primary : Colors.light.textSecondary}
+            />
+            <Text style={styles.checkboxLabel}>
+              Enregistrer seulement (sans l'agent)
+            </Text>
+          </TouchableOpacity>
+
+          <Text style={styles.defaultHint}>
+            {action === 'agent' && '(Rien de coché = envoi à l\'agent)'}
+            {action === 'agent+save' && '(Envoi + sauvegarde)'}
+            {action === 'save' && '(Sauvegarde uniquement)'}
+          </Text>
+
+          {showInput && (
+            <>
+              <Text style={styles.label}>Ajouter un message (optionnel)</Text>
+
+              <View style={styles.inputRow}>
+                <TextInput
+                  style={styles.input}
+                  value={message}
+                  onChangeText={setMessage}
+                  placeholder={isListening ? 'Je t\'écoute...' : 'Ex: Analyse cette photo'}
+                  placeholderTextColor={Colors.light.textSecondary}
+                  multiline
+                  editable={!isListening}
+                />
+                <TouchableOpacity
+                  style={[styles.micButton, isListening && styles.micButtonActive]}
+                  onPress={handleMicPress}
+                >
+                  <Ionicons
+                    name={isListening ? 'stop' : 'mic'}
+                    size={22}
+                    color={Colors.light.background}
+                  />
+                </TouchableOpacity>
+              </View>
+
+              {isListening && (
+                <Text style={styles.listeningHint}>
+                  🎤 Parle, ton message s'écrit tout seul
+                </Text>
+              )}
+            </>
+          )}
+
+          <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
+            <Ionicons name="checkmark-circle" size={20} color={Colors.light.background} />
+            <Text style={styles.sendText}>Valider</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
@@ -187,17 +205,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two,
     paddingVertical: Spacing.two,
-    marginBottom: Spacing.two,
   },
   checkboxLabel: {
     fontSize: 15,
     color: Colors.light.text,
+    flex: 1,
+  },
+  defaultHint: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    fontStyle: 'italic',
+    marginTop: Spacing.two,
+    marginBottom: Spacing.two,
   },
   label: {
     fontSize: 13,
     fontWeight: '600',
     color: Colors.light.textSecondary,
     marginBottom: Spacing.two,
+    marginTop: Spacing.two,
   },
   inputRow: {
     flexDirection: 'row',
@@ -250,19 +276,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.light.background,
   },
-  sendWithoutButton: {
-    paddingVertical: Spacing.three,
-    alignItems: 'center',
-    marginTop: Spacing.two,
-  },
-  sendWithoutText: {
-    fontSize: 15,
-    color: Colors.light.primary,
-    fontWeight: '600',
-  },
   cancelButton: {
     paddingVertical: Spacing.two,
     alignItems: 'center',
+    marginTop: Spacing.two,
   },
   cancelText: {
     fontSize: 14,

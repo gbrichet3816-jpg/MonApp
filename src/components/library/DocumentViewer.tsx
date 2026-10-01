@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import * as FileSystem from 'expo-file-system/legacy';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -22,10 +23,39 @@ type Props = {
 export default function DocumentViewer({ filePath, fileType, title, content }: Props) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [textFileContent, setTextFileContent] = useState<string | null>(null);
 
   const isImage = fileType?.startsWith('image/');
   const isPdf = fileType?.includes('pdf');
-  const isText = fileType?.startsWith('text/');
+  const isText =
+    fileType?.startsWith('text/') ||
+    fileType?.includes('json') ||
+    fileType === 'application/octet-stream';
+
+  // Charge le contenu du fichier texte
+  useEffect(() => {
+    if (isText && filePath) {
+      loadTextFile();
+    }
+  }, [filePath, isText]);
+
+  const loadTextFile = async () => {
+    if (!filePath) return;
+    try {
+      setIsLoading(true);
+      const base64 = await (FileSystem as any).readAsStringAsync(filePath, {
+        encoding: 'base64',
+      });
+      const decoded = decodeBase64Utf8(base64);
+      setTextFileContent(decoded);
+      setError(null);
+    } catch (e) {
+      console.error('Erreur lecture fichier texte:', e);
+      setError('Impossible de lire le fichier texte');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // ===== IMAGE =====
   if (isImage && filePath) {
@@ -63,9 +93,6 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
             console.log(`PDF chargé : ${numberOfPages} pages`);
             setIsLoading(false);
           }}
-          onPageChanged={(page, numberOfPages) => {
-            console.log(`Page ${page}/${numberOfPages}`);
-          }}
           onError={(err) => {
             console.error('Erreur PDF:', err);
             setError('Impossible de charger le PDF');
@@ -88,11 +115,44 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     );
   }
 
-  // ===== TEXTE ou contenu simple =====
-  if ((isText || !fileType) && content) {
+  // ===== TEXTE / FICHIER TEXTE =====
+  if (isText) {
+    if (isLoading) {
+      return (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={Colors.light.primary} />
+          <Text style={styles.loaderText}>Chargement du fichier...</Text>
+        </View>
+      );
+    }
+
+    if (error) {
+      return (
+        <View style={styles.unknownContainer}>
+          <Ionicons name="alert-circle" size={64} color={Colors.light.error} />
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      );
+    }
+
+    const displayContent = textFileContent || content || '(fichier vide)';
+
     return (
       <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        <Text style={styles.textContentText}>{content}</Text>
+        <Text style={styles.textContentText} selectable>
+          {displayContent}
+        </Text>
+      </ScrollView>
+    );
+  }
+
+  // ===== CONTENU TEXTE SIMPLE (sans fichier) =====
+  if (!fileType && content) {
+    return (
+      <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
+        <Text style={styles.textContentText} selectable>
+          {content}
+        </Text>
       </ScrollView>
     );
   }
@@ -121,10 +181,35 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
   );
 }
 
+// Décode le base64 en texte UTF-8
+function decodeBase64Utf8(base64: string): string {
+  try {
+    const binaryString = (global as any).atob
+      ? (global as any).atob(base64)
+      : Buffer.from(base64, 'base64').toString('binary');
+
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    return new TextDecoder('utf-8').decode(bytes);
+  } catch (e) {
+    console.error('Erreur décodage base64:', e);
+    return '';
+  }
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.light.background,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: Spacing.two,
   },
   fullImage: {
     flex: 1,
@@ -164,9 +249,10 @@ const styles = StyleSheet.create({
     padding: Spacing.four,
   },
   textContentText: {
-    fontSize: 16,
-    lineHeight: 24,
+    fontSize: 15,
+    lineHeight: 23,
     color: Colors.light.text,
+    fontFamily: 'monospace',
   },
   unknownContainer: {
     flex: 1,

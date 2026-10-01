@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 
@@ -77,7 +77,7 @@ export async function generatePdf({
           </div>
           <div class="content">${contentHtml}</div>
           <div class="footer">
-            Généré par MonApp
+            Généré par Agents
           </div>
         </body>
       </html>
@@ -166,7 +166,7 @@ export async function printPdf({
           </div>
           <div class="content">${contentHtml}</div>
           <div class="footer">
-            Généré par MonApp
+            Généré par Agents
           </div>
         </body>
       </html>
@@ -210,7 +210,6 @@ export async function sharePdf({
   }
 }
 
-// Enregistre un PDF dans le stockage local du téléphone (Documents)
 export async function savePdfToDevice({
   title,
   content,
@@ -224,7 +223,6 @@ export async function savePdfToDevice({
     const uri = await generatePdf({ title, content, agentId });
     if (!uri) return { success: false };
 
-    // Nettoie le titre pour en faire un nom de fichier
     const safeTitle = title
       .replace(/[^a-z0-9]/gi, '_')
       .replace(/_+/g, '_')
@@ -233,8 +231,6 @@ export async function savePdfToDevice({
     const timestamp = Date.now();
     const fileName = `${safeTitle}_${timestamp}.pdf`;
 
-    // Dossier de destination (Documents sur Android)
-        // Dossier de destination (Documents sur Android)
     const docDir = (FileSystem as any).documentDirectory;
     if (!docDir) return { success: false };
 
@@ -252,7 +248,6 @@ export async function savePdfToDevice({
   }
 }
 
-// Enregistre plusieurs PDF d'un coup
 export async function saveMultiplePdfs(
   documents: { title: string; content: string; agentId: string }[],
 ): Promise<{ success: number; failed: number }> {
@@ -275,7 +270,6 @@ export async function saveMultiplePdfs(
   return { success, failed };
 }
 
-// Partage plusieurs PDF via le menu Android
 export async function shareMultiplePdfs(
   documents: { title: string; content: string; agentId: string }[],
 ): Promise<boolean> {
@@ -284,8 +278,6 @@ export async function shareMultiplePdfs(
       return false;
     }
 
-    // Pour l'instant, on partage un par un
-    // (Android ne supporte pas le partage multiple natif facilement)
     for (const doc of documents) {
       const uri = await generatePdf({
         title: doc.title,
