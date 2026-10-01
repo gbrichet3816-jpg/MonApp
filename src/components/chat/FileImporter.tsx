@@ -1,12 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
 
 export type ImportedFile = {
-  type: 'image' | 'document';
+  type: 'image' | 'document' | 'pdf';
   uri: string;
   base64?: string;
   mimeType: string;
@@ -52,17 +53,33 @@ export default function FileImporter({ visible, onClose, onFilePicked }: Props) 
   const handleDocument = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*', 'text/*'],
+        type: ['application/pdf', 'image/*', 'text/*', 'audio/*', 'video/*'],
         copyToCacheDirectory: true,
       });
 
       if (result.canceled || !result.assets[0]) return;
 
       const asset = result.assets[0];
+      const mimeType = asset.mimeType || 'application/octet-stream';
+      const isPdf = mimeType.includes('pdf');
+
+      // Pour les PDF, on lit le base64
+      let base64: string | undefined;
+      if (isPdf || mimeType.startsWith('image/')) {
+        try {
+          base64 = await (FileSystem as any).readAsStringAsync(asset.uri, {
+            encoding: 'base64',
+          });
+        } catch (e) {
+          console.warn('Impossible de lire le base64:', e);
+        }
+      }
+
       onFilePicked({
-        type: 'document',
+        type: isPdf ? 'pdf' : 'document',
         uri: asset.uri,
-        mimeType: asset.mimeType || 'application/octet-stream',
+        base64,
+        mimeType,
         fileName: asset.name,
         title: asset.name.replace(/\.[^.]+$/, ''),
       });

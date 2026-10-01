@@ -59,3 +59,36 @@ export async function sendMessageToAgent({
     toolCalls: data.toolCalls,
   };
 }
+
+// Extrait le texte d'un PDF via le serveur
+export async function extractPdfText(base64Data: string): Promise<{
+  success: boolean;
+  text?: string;
+  pages?: number;
+  error?: string;
+}> {
+  try {
+    const response = await fetch(`${API_URL}/extract-pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileData: base64Data }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      return { success: false, error: data.error || 'Erreur extraction PDF' };
+    }
+
+    const data = await response.json();
+    return {
+      success: true,
+      text: data.text || '',
+      pages: data.pages || 0,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Erreur réseau',
+    };
+  }
+}

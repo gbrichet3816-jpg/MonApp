@@ -1,13 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Audio, ResizeMode, Video } from 'expo-av';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Image,
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import Pdf from 'react-native-pdf';
@@ -27,8 +25,6 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
 
   const isImage = fileType?.startsWith('image/');
   const isPdf = fileType?.includes('pdf');
-  const isAudio = fileType?.startsWith('audio/');
-  const isVideo = fileType?.startsWith('video/');
   const isText = fileType?.startsWith('text/');
 
   // ===== IMAGE =====
@@ -92,26 +88,6 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     );
   }
 
-  // ===== AUDIO =====
-  if (isAudio && filePath) {
-    return <AudioPlayer uri={filePath} />;
-  }
-
-  // ===== VIDÉO =====
-  if (isVideo && filePath) {
-    return (
-      <View style={styles.videoContainer}>
-        <Video
-          source={{ uri: filePath }}
-          style={styles.video}
-          useNativeControls
-          resizeMode={ResizeMode.CONTAIN}
-          isLooping={false}
-        />
-      </View>
-    );
-  }
-
   // ===== TEXTE ou contenu simple =====
   if ((isText || !fileType) && content) {
     return (
@@ -133,93 +109,14 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
       <Text style={styles.unknownText}>
         {fileType ? `Type : ${fileType}` : 'Type inconnu'}
       </Text>
+      <Text style={styles.unknownHint}>
+        Ce type de fichier n'est pas encore lisible dans l'appli.
+      </Text>
       {content ? (
         <View style={styles.unknownContentBox}>
           <Text style={styles.unknownContentText}>{content}</Text>
         </View>
       ) : null}
-    </View>
-  );
-}
-
-// ===== LECTEUR AUDIO =====
-function AudioPlayer({ uri }: { uri: string }) {
-  const soundRef = useRef<Audio.Sound | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [duration, setDuration] = useState(0);
-  const [position, setPosition] = useState(0);
-
-  useEffect(() => {
-    loadAudio();
-    return () => {
-      if (soundRef.current) {
-        soundRef.current.unloadAsync();
-      }
-    };
-  }, [uri]);
-
-  const loadAudio = async () => {
-    try {
-      setIsLoading(true);
-      const { sound } = await Audio.Sound.createAsync(
-        { uri },
-        { shouldPlay: false },
-        (status) => {
-          if (status.isLoaded) {
-            setPosition(status.positionMillis);
-            setDuration(status.durationMillis || 0);
-            setIsPlaying(status.isPlaying);
-          }
-        },
-      );
-      soundRef.current = sound;
-      setIsLoading(false);
-    } catch (e) {
-      console.error('Erreur chargement audio:', e);
-      setIsLoading(false);
-    }
-  };
-
-  const togglePlay = async () => {
-    if (!soundRef.current) return;
-    if (isPlaying) {
-      await soundRef.current.pauseAsync();
-    } else {
-      await soundRef.current.playAsync();
-    }
-  };
-
-  const formatTime = (ms: number) => {
-    const totalSec = Math.floor(ms / 1000);
-    const min = Math.floor(totalSec / 60);
-    const sec = totalSec % 60;
-    return `${min}:${sec.toString().padStart(2, '0')}`;
-  };
-
-  if (isLoading) {
-    return (
-      <View style={styles.audioContainer}>
-        <ActivityIndicator size="large" color={Colors.light.primary} />
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.audioContainer}>
-      <Ionicons name="musical-notes" size={64} color={Colors.light.primary} />
-
-      <TouchableOpacity style={styles.audioPlayButton} onPress={togglePlay}>
-        <Ionicons
-          name={isPlaying ? 'pause' : 'play'}
-          size={40}
-          color={Colors.light.background}
-        />
-      </TouchableOpacity>
-
-      <Text style={styles.audioTime}>
-        {formatTime(position)} / {formatTime(duration)}
-      </Text>
     </View>
   );
 }
@@ -237,15 +134,6 @@ const styles = StyleSheet.create({
     flex: 1,
     width: '100%',
     backgroundColor: Colors.light.backgroundElement,
-  },
-  videoContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    backgroundColor: '#000',
-  },
-  video: {
-    width: '100%',
-    height: 300,
   },
   loaderOverlay: {
     position: 'absolute',
@@ -297,6 +185,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.light.textSecondary,
   },
+  unknownHint: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    fontStyle: 'italic',
+    textAlign: 'center',
+  },
   unknownContentBox: {
     marginTop: Spacing.four,
     padding: Spacing.three,
@@ -308,24 +202,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.light.text,
     lineHeight: 20,
-  },
-  audioContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: Spacing.four,
-    padding: Spacing.five,
-  },
-  audioPlayButton: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: Colors.light.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  audioTime: {
-    fontSize: 16,
-    color: Colors.light.textSecondary,
   },
 });

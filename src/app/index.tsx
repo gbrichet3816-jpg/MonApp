@@ -17,7 +17,7 @@ import AgentMenu from '@/components/common/AgentMenu';
 import Header from '@/components/common/Header';
 import Onboarding from '@/components/common/Onboarding';
 import SettingsModal from '@/components/common/SettingsModal';
-import { ApiMessage, sendMessageToAgent, ToolCall } from '@/config/api';
+import { ApiMessage, extractPdfText, sendMessageToAgent, ToolCall } from '@/config/api';
 import {
   deactivateAllReminders,
   deactivateRemindersByName,
@@ -119,7 +119,6 @@ export default function HomeScreen() {
     });
   };
 
-  // ===== GESTION DES TOOL CALLS =====
   const handleToolCalls = async (
     toolCalls: ToolCall[],
     agentId: string,
@@ -129,7 +128,6 @@ export default function HomeScreen() {
     for (const call of toolCalls) {
       const args = call.arguments as any;
 
-      // ===== CREATE DOCUMENT =====
       if (call.name === 'createDocument') {
         const docId = `doc-${Date.now()}`;
         saveDocument({
@@ -143,10 +141,7 @@ export default function HomeScreen() {
           text: `C'est fait ! J'ai créé "${args.title}" dans ta bibliothèque.`,
           isUser: false,
         });
-      }
-
-      // ===== CREATE DAILY REMINDERS (tableau) =====
-      else if (call.name === 'createDailyReminders') {
+      } else if (call.name === 'createDailyReminders') {
         const medicationName = args.medicationName;
         const times: string[] = args.times || [];
 
@@ -160,7 +155,6 @@ export default function HomeScreen() {
         });
 
         if (results.length > 0) {
-          // Sauvegarde chaque rappel en base
           results.forEach((r) => {
             saveReminder({
               id: r.reminderId,
@@ -172,7 +166,6 @@ export default function HomeScreen() {
             });
           });
 
-          // Message de confirmation
           const timesFormatted = times.map((t) => t.replace(':', 'h')).join(', ');
           const suffix = times.length > 1 ? 's' : '';
 
@@ -182,10 +175,7 @@ export default function HomeScreen() {
             isUser: false,
           });
         }
-      }
-
-      // ===== CREATE ONE-TIME REMINDERS (tableau) =====
-      else if (call.name === 'createOneTimeReminders') {
+      } else if (call.name === 'createOneTimeReminders') {
         const medicationName = args.medicationName;
         const dateTimes: string[] = args.dateTimes || [];
 
@@ -221,10 +211,7 @@ export default function HomeScreen() {
             isUser: false,
           });
         }
-      }
-
-      // ===== CREATE RELATIVE REMINDER =====
-      else if (call.name === 'createRelativeReminder') {
+      } else if (call.name === 'createRelativeReminder') {
         const medicationName = args.medicationName;
         const minutesFromNow = args.minutesFromNow;
         const reminderId = `reminder-${Date.now()}`;
@@ -257,20 +244,14 @@ export default function HomeScreen() {
             isUser: false,
           });
         }
-      }
-
-      // ===== SAVE PREFERENCE =====
-      else if (call.name === 'saveUserPreference') {
+      } else if (call.name === 'saveUserPreference') {
         savePreference(args.preferenceKey, args.preferenceValue);
         resultMessages.push({
           id: `agent-${Date.now()}-pref`,
           text: `C'est noté ! J'ai bien enregistré ta préférence.`,
           isUser: false,
         });
-      }
-
-      // ===== CANCEL REMINDERS =====
-      else if (call.name === 'cancelReminders') {
+      } else if (call.name === 'cancelReminders') {
         if (args.medicationName) {
           deactivateRemindersByName(agentId, args.medicationName);
           resultMessages.push({
@@ -286,10 +267,7 @@ export default function HomeScreen() {
             isUser: false,
           });
         }
-      }
-
-      // ===== LIST REMINDERS =====
-      else if (call.name === 'listReminders') {
+      } else if (call.name === 'listReminders') {
         const reminders = loadReminders(agentId);
         if (reminders.length === 0) {
           resultMessages.push({
@@ -369,7 +347,6 @@ export default function HomeScreen() {
       if (result.toolCalls && result.toolCalls.length > 0) {
         const toolMessages = await handleToolCalls(result.toolCalls, selectedAgent.id);
 
-        // Affiche les messages de confirmation des tools
         toolMessages.forEach((msg) => {
           setMessages((prev) => [...prev, msg]);
           saveMessage({
@@ -380,7 +357,6 @@ export default function HomeScreen() {
           });
         });
 
-        // Affiche aussi le texte de DeepSeek s'il y en a
         if (result.reply) {
           const replyMessage: ChatMessage = {
             id: `agent-reply-${Date.now()}`,
@@ -450,7 +426,8 @@ export default function HomeScreen() {
     }
 
     const isImage = pendingFile.type === 'image';
-    const userText = message || (isImage ? 'Analyse cette image' : `Fichier : ${pendingFile.fileName}`);
+    const isPdf = pendingFile.type === 'pdf';
+    const userText = message || (isImage ? 'Analyse cette image' : isPdf ? 'Analyse ce PDF' : `Fichier : ${pendingFile.fileName}`);
 
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -480,6 +457,16 @@ export default function HomeScreen() {
             image_url: { url: `data:${pendingFile.mimeType};base64,${pendingFile.base64}` },
           },
         ];
+      } else if (isPdf && pendingFile.base64) {
+        // Extraction du texte du PDF via le serveur
+        const extractResult = await extractPdfText(pendingFile.base64);
+
+        if (extractResult.success && extractResult.text) {
+          const pdfText = extractResult.text.slice(0, 15000); // Limite à 15000 caractères
+          content = `${userText}\n\n--- Contenu du PDF "${pendingFile.fileName}" (${extractResult.pages} pages) ---\n\n${pdfText}`;
+        } else {
+          content = `${userText}\n\n[Impossible d'extraire le texte du PDF : ${extractResult.error || 'inconnu'}]`;
+        }
       } else if (!isImage) {
         content = `[Fichier : ${pendingFile.fileName}]\n${message || 'Fichier envoyé'}`;
       }
