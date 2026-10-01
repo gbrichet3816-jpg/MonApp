@@ -4,9 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AGENTS } from '@/agents';
 import {
-  parseMedicationFromMessage,
-  parseTimeFromMessage,
-  scheduleMedicationReminder,
+  scheduleDailyReminder,
+  scheduleOneTimeReminder,
+  scheduleRelativeReminder,
 } from '@/agents/sante/reminders';
 import { ImportedFile } from '@/components/chat/FileImporter';
 import FileMessageModal from '@/components/chat/FileMessageModal';
@@ -19,15 +19,20 @@ import Onboarding from '@/components/common/Onboarding';
 import SettingsModal from '@/components/common/SettingsModal';
 import { ApiMessage, sendMessageToAgent, ToolCall } from '@/config/api';
 import {
+  deactivateAllReminders,
+  deactivateRemindersByName,
   findRemindersToAsk,
   initDatabase,
   loadMessages,
+  loadReminders,
   markRemindersAsAsked,
   saveDocument,
   saveMessage,
+  savePreference,
   saveReminder,
   setReminderResponse,
 } from '@/config/database';
+import { saveFileToDocuments } from '@/config/files';
 import { requestNotificationPermission } from '@/config/notifications';
 import { getLocalProfile } from '@/config/user';
 import { Colors } from '@/constants/theme';
@@ -114,14 +119,18 @@ export default function HomeScreen() {
     });
   };
 
+  // ===== GESTION DES TOOL CALLS =====
   const handleToolCalls = async (
     toolCalls: ToolCall[],
     agentId: string,
   ): Promise<ChatMessage | null> => {
-    for (const call of toolCalls) {
-      if (call.name === 'createDocument') {
-        const args = call.arguments as { title: string; content: string };
+    let lastMessage: ChatMessage | null = null;
 
+    for (const call of toolCalls) {
+      const args = call.arguments as any;
+
+      // ===== CREATE DOCUMENT =====
+      if (call.name === 'createDocument') {
         const docId = `doc-${Date.now()}`;
         saveDocument({
           id: docId,
@@ -129,15 +138,163 @@ export default function HomeScreen() {
           title: args.title,
           content: args.content,
         });
-
-        return {
-          id: `agent-${Date.now()}`,
+        lastMessage = {
+          id: `agent-${Date.now()}-doc`,
           text: `C'est fait ! J'ai créé "${args.title}" dans ta bibliothèque.`,
           isUser: false,
         };
       }
+
+      // ===== CREATE DAILY REMINDER =====
+      else if (call.name === 'createDailyReminder') {
+        const medicationName = args.medicationName;
+        const time = args.time;
+        const reminderId = `reminder-${Date.now()}`;
+
+        const notificationId = await scheduleDailyReminder({
+          medicationName,
+          time,
+          reminderId,
+        });
+
+        if (notificationId) {
+          saveReminder({
+            id: reminderId,
+            agentId,
+            medicationName,
+            time,
+            notificationId,
+            reminderType: 'daily',
+          });
+          lastMessage = {
+            id: `agent-${Date.now()}-rem`,
+            text: `C'est noté ! Je te rappellerai tous les jours à ${time.replace(':', 'h')} de prendre ${medicationName}.`,
+            isUser: false,
+          };
+        }
+      }
+
+      // ===== CREATE ONE-TIME REMINDER =====
+      else if (call.name === 'createOneTimeReminder') {
+        const medicationName = args.medicationName;
+        const dateTime = args.dateTime;
+        const reminderId = `reminder-${Date.now()}`;
+
+        const { notificationId, scheduledAt } = await scheduleOneTimeReminder({
+          medicationName,
+          dateTime,
+          reminderId,
+        });
+
+        if (notificationId && scheduledAt) {
+          const date = new Date(scheduledAt);
+          const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+
+          saveReminder({
+            id: reminderId,
+            agentId,
+            medicationName,
+            time: timeStr,
+            notificationId,
+            reminderType: 'onetime',
+            scheduledAt,
+          });
+          lastMessage = {
+            id: `agent-${Date.now()}-rem`,
+            text: `C'est noté ! Je te rappellerai le ${date.toLocaleDateString('fr-FR')} à ${timeStr.replace(':', 'h')} de prendre ${medicationName}.`,
+            isUser: false,
+          };
+        }
+      }
+
+      // ===== CREATE RELATIVE REMINDER =====
+      else if (call.name === 'createRelativeReminder') {
+        const medicationName = args.medicationName;
+        const minutesFromNow = args.minutesFromNow;
+        const reminderId = `reminder-${Date.now()}`;
+
+        const { notificationId, scheduledAt } = await scheduleRelativeReminder({
+          medicationName,
+          minutesFromNow,
+          reminderId,
+        });
+
+        if (notificationId && scheduledAt) {
+          const date = new Date(scheduledAt);
+          const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+          const label = minutesFromNow >= 60
+            ? `${Math.round(minutesFromNow / 60)}h`
+            : `${minutesFromNow} min`;
+
+          saveReminder({
+            id: reminderId,
+            agentId,
+            medicationName,
+            time: timeStr,
+            notificationId,
+            reminderType: 'relative',
+            scheduledAt,
+          });
+          lastMessage = {
+            id: `agent-${Date.now()}-rem`,
+            text: `D'accord ! Je te rappelle dans ${label} pour ${medicationName}.`,
+            isUser: false,
+          };
+        }
+      }
+
+      // ===== SAVE PREFERENCE =====
+      else if (call.name === 'saveUserPreference') {
+        savePreference(args.preferenceKey, args.preferenceValue);
+        lastMessage = {
+          id: `agent-${Date.now()}-pref`,
+          text: `C'est noté ! J'ai bien enregistré ta préférence.`,
+          isUser: false,
+        };
+      }
+
+      // ===== CANCEL REMINDER =====
+      else if (call.name === 'cancelReminder') {
+        if (args.medicationName) {
+          deactivateRemindersByName(agentId, args.medicationName);
+          lastMessage = {
+            id: `agent-${Date.now()}-cancel`,
+            text: `C'est fait ! J'ai annulé les rappels pour ${args.medicationName}.`,
+            isUser: false,
+          };
+        } else {
+          deactivateAllReminders(agentId);
+          lastMessage = {
+            id: `agent-${Date.now()}-cancel`,
+            text: `C'est fait ! J'ai annulé tous tes rappels.`,
+            isUser: false,
+          };
+        }
+      }
+
+      // ===== LIST REMINDERS =====
+      else if (call.name === 'listReminders') {
+        const reminders = loadReminders(agentId);
+        if (reminders.length === 0) {
+          lastMessage = {
+            id: `agent-${Date.now()}-list`,
+            text: `Tu n'as aucun rappel actif pour le moment.`,
+            isUser: false,
+          };
+        } else {
+          const list = reminders
+            .map((r) => `• ${r.medication_name} à ${r.time.replace(':', 'h')} (${r.reminder_type === 'daily' ? 'tous les jours' : r.reminder_type === 'onetime' ? 'une fois' : 'relatif'})`)
+            .join('\n');
+          lastMessage = {
+            id: `agent-${Date.now()}-list`,
+            text: `Voici tes rappels actifs :\n\n${list}`,
+            isUser: false,
+          };
+        }
+      }
     }
-    return null;
+
+    return lastMessage;
   };
 
   const selectedAgent = AGENTS.find((a) => a.id === selectedAgentId);
@@ -161,6 +318,7 @@ export default function HomeScreen() {
       isUser: true,
     });
 
+    // Réponse à un rappel en attente
     if (selectedAgent.id === 'sante') {
       const remindersToAsk = findRemindersToAsk('sante');
       if (remindersToAsk.length > 0) {
@@ -172,51 +330,6 @@ export default function HomeScreen() {
           setReminderResponse(first.id, 'not_taken');
         } else if (lower.includes('plus tard') || lower.includes('attends')) {
           setReminderResponse(first.id, 'later');
-        }
-      }
-    }
-
-    if (selectedAgent.id === 'sante') {
-      const time = parseTimeFromMessage(text);
-      const medication = parseMedicationFromMessage(text);
-      const mentionsReminder = /rappelle|rappel|médicament|medicament|prendre/i.test(text);
-
-      if (time && mentionsReminder) {
-        const medicationName = medication || 'ton médicament';
-        const reminderId = `reminder-${Date.now()}`;
-
-        try {
-          const notificationId = await scheduleMedicationReminder({
-            medicationName,
-            time,
-            reminderId,
-          });
-
-          if (notificationId) {
-            saveReminder({
-              id: reminderId,
-              agentId: selectedAgent.id,
-              medicationName,
-              time,
-              notificationId,
-            });
-
-            const confirmMessage: ChatMessage = {
-              id: `agent-${Date.now()}`,
-              text: `C'est noté ! Je te rappellerai de prendre ${medicationName} à ${time.replace(':', 'h')} chaque jour.`,
-              isUser: false,
-            };
-            setMessages((prev) => [...prev, confirmMessage]);
-            saveMessage({
-              id: confirmMessage.id,
-              agentId: selectedAgent.id,
-              text: confirmMessage.text,
-              isUser: false,
-            });
-            return;
-          }
-        } catch (error) {
-          console.warn('Erreur création rappel:', error);
         }
       }
     }
@@ -303,14 +416,17 @@ export default function HomeScreen() {
     setFileModalVisible(false);
     if (!pendingFile || !selectedAgent) return;
 
-    // Sauvegarde dans la bibliothèque si coché
     if (saveToLibrary) {
       const docId = `doc-file-${Date.now()}`;
+      const savedPath = await saveFileToDocuments(pendingFile.uri, pendingFile.fileName);
+
       saveDocument({
         id: docId,
         agentId: selectedAgent.id,
         title: pendingFile.title,
-        content: `Fichier : ${pendingFile.fileName}\nType : ${pendingFile.mimeType}`,
+        content: message || '',
+        filePath: savedPath || undefined,
+        fileType: pendingFile.mimeType,
       });
     }
 
@@ -404,14 +520,18 @@ export default function HomeScreen() {
     setPhotoModalVisible(false);
     if (!pendingPhoto || !selectedAgent) return;
 
-    // Sauvegarde dans la bibliothèque si coché
     if (saveToLibrary) {
       const docId = `doc-photo-${Date.now()}`;
+      const fileName = `photo_${Date.now()}.jpg`;
+      const savedPath = await saveFileToDocuments(pendingPhoto.uri, fileName);
+
       saveDocument({
         id: docId,
         agentId: selectedAgent.id,
         title: `Photo du ${new Date().toLocaleDateString('fr-FR')}`,
-        content: `[Photo enregistrée]\n\n${message || '(pas de description)'}`,
+        content: message || '',
+        filePath: savedPath || undefined,
+        fileType: 'image/jpeg',
       });
     }
 

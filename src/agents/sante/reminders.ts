@@ -11,7 +11,10 @@ export type MedicationReminder = {
   active: boolean;
 };
 
-export async function scheduleMedicationReminder({
+// ===== PROGRAMMATION DE RAPPELS =====
+
+// Rappel QUOTIDIEN (récurrent à heure fixe)
+export async function scheduleDailyReminder({
   medicationName,
   time,
   reminderId,
@@ -39,16 +42,87 @@ export async function scheduleMedicationReminder({
         type: 'medication-reminder',
         reminderId,
         medicationName,
+        reminderType: 'daily',
       },
     });
 
     return notificationId;
   } catch (error) {
-    console.error('Erreur programmation rappel:', error);
+    console.error('Erreur programmation rappel quotidien:', error);
     return null;
   }
 }
 
+// Rappel UNIQUE (une seule fois à une date précise)
+export async function scheduleOneTimeReminder({
+  medicationName,
+  dateTime,
+  reminderId,
+}: {
+  medicationName: string;
+  dateTime: string;
+  reminderId: string;
+}): Promise<{ notificationId: string | null; scheduledAt: number | null }> {
+  try {
+    const target = new Date(dateTime);
+
+    if (isNaN(target.getTime()) || target.getTime() <= Date.now()) {
+      console.warn('Date invalide ou passée:', dateTime);
+      return { notificationId: null, scheduledAt: null };
+    }
+
+    const notificationId = await scheduleNotification({
+      title: '💊 Rappel de médicament',
+      body: `C'est l'heure de prendre : ${medicationName}`,
+      date: target,
+      data: {
+        type: 'medication-reminder',
+        reminderId,
+        medicationName,
+        reminderType: 'onetime',
+      },
+    });
+
+    return { notificationId, scheduledAt: target.getTime() };
+  } catch (error) {
+    console.error('Erreur programmation rappel unique:', error);
+    return { notificationId: null, scheduledAt: null };
+  }
+}
+
+// Rappel RELATIF (dans X minutes)
+export async function scheduleRelativeReminder({
+  medicationName,
+  minutesFromNow,
+  reminderId,
+}: {
+  medicationName: string;
+  minutesFromNow: number;
+  reminderId: string;
+}): Promise<{ notificationId: string | null; scheduledAt: number | null }> {
+  try {
+    const target = new Date(Date.now() + minutesFromNow * 60 * 1000);
+
+    const notificationId = await scheduleNotification({
+      title: '💊 Rappel de médicament',
+      body: `C'est l'heure de prendre : ${medicationName}`,
+      date: target,
+      data: {
+        type: 'medication-reminder',
+        reminderId,
+        medicationName,
+        reminderType: 'relative',
+      },
+    });
+
+    return { notificationId, scheduledAt: target.getTime() };
+  } catch (error) {
+    console.error('Erreur programmation rappel relatif:', error);
+    return { notificationId: null, scheduledAt: null };
+  }
+}
+
+// Annule un rappel par notification ID
 export async function cancelMedicationReminder(notificationId: string) {
   try {
     await cancelNotification(notificationId);
@@ -56,6 +130,8 @@ export async function cancelMedicationReminder(notificationId: string) {
     console.error('Erreur annulation rappel:', error);
   }
 }
+
+// ===== PARSERS (fallback si DeepSeek ne détecte pas) =====
 
 export function parseTimeFromMessage(message: string): string | null {
   const regex = /(\d{1,2})\s*[h:]\s*(\d{0,2})/;

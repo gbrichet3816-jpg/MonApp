@@ -26,7 +26,15 @@ export function initDatabase() {
       active INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
       last_fired_at INTEGER,
-      response TEXT
+      response TEXT,
+      reminder_type TEXT DEFAULT 'daily',
+      scheduled_at INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS preferences (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS documents (
@@ -43,15 +51,16 @@ export function initDatabase() {
       ON documents (agent_id, created_at);
   `);
 
-  try {
-    db.execSync('ALTER TABLE documents ADD COLUMN file_path TEXT');
-  } catch (e) {}
-  try {
-    db.execSync('ALTER TABLE documents ADD COLUMN file_type TEXT');
-  } catch (e) {}
+  // Migrations
+  try { db.execSync('ALTER TABLE documents ADD COLUMN file_path TEXT'); } catch (e) {}
+  try { db.execSync('ALTER TABLE documents ADD COLUMN file_type TEXT'); } catch (e) {}
+  try { db.execSync('ALTER TABLE reminders ADD COLUMN reminder_type TEXT DEFAULT \'daily\''); } catch (e) {}
+  try { db.execSync('ALTER TABLE reminders ADD COLUMN scheduled_at INTEGER'); } catch (e) {}
 
   initUserTable();
 }
+
+// ===== MESSAGES =====
 
 export function saveMessage({
   id,
@@ -98,22 +107,28 @@ export function clearAllMessages() {
   db.runSync('DELETE FROM messages');
 }
 
+// ===== RAPPELS =====
+
 export function saveReminder({
   id,
   agentId,
   medicationName,
   time,
   notificationId,
+  reminderType = 'daily',
+  scheduledAt,
 }: {
   id: string;
   agentId: string;
   medicationName: string;
   time: string;
   notificationId: string;
+  reminderType?: string;
+  scheduledAt?: number;
 }) {
   db.runSync(
-    'INSERT OR REPLACE INTO reminders (id, agent_id, medication_name, time, notification_id, active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)',
-    [id, agentId, medicationName, time, notificationId, Date.now()],
+    'INSERT OR REPLACE INTO reminders (id, agent_id, medication_name, time, notification_id, active, created_at, reminder_type, scheduled_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)',
+    [id, agentId, medicationName, time, notificationId, Date.now(), reminderType, scheduledAt || null],
   );
 }
 
@@ -128,11 +143,24 @@ export function loadReminders(agentId: string) {
     created_at: number;
     last_fired_at: number | null;
     response: string | null;
+    reminder_type: string;
+    scheduled_at: number | null;
   }>('SELECT * FROM reminders WHERE agent_id = ? AND active = 1', [agentId]);
 }
 
 export function deactivateReminder(id: string) {
   db.runSync('UPDATE reminders SET active = 0 WHERE id = ?', [id]);
+}
+
+export function deactivateRemindersByName(agentId: string, medicationName: string) {
+  db.runSync(
+    'UPDATE reminders SET active = 0 WHERE agent_id = ? AND LOWER(medication_name) = LOWER(?)',
+    [agentId, medicationName],
+  );
+}
+
+export function deactivateAllReminders(agentId: string) {
+  db.runSync('UPDATE reminders SET active = 0 WHERE agent_id = ?', [agentId]);
 }
 
 export function clearReminders(agentId: string) {
@@ -161,12 +189,19 @@ export function findRemindersToAsk(agentId: string) {
     created_at: number;
     last_fired_at: number | null;
     response: string | null;
+    reminder_type: string;
+    scheduled_at: number | null;
   }>('SELECT * FROM reminders WHERE agent_id = ? AND active = 1 AND response IS NULL', [agentId]);
 
   return rows.filter((r) => {
+    if (r.reminder_type === 'relative' || r.reminder_type === 'onetime') {
+      // Pour les relatifs et uniques, on vérifie scheduled_at
+      return r.scheduled_at !== null && r.scheduled_at <= Date.now() && r.last_fired_at === null;
+    }
+
+    // Pour les quotidiens
     const [h, m] = r.time.split(':').map(Number);
     const reminderMinutes = h * 60 + m;
-
     return reminderMinutes <= currentMinutes && r.last_fired_at === null;
   });
 }
@@ -178,6 +213,34 @@ export function markRemindersAsAsked(ids: string[]) {
     db.runSync('UPDATE reminders SET last_fired_at = ? WHERE id = ?', [now, id]);
   });
 }
+
+// ===== PRÉFÉRENCES =====
+
+export function savePreference(key: string, value: string) {
+  db.runSync(
+    'INSERT OR REPLACE INTO preferences (key, value, updated_at) VALUES (?, ?, ?)',
+    [key, value, Date.now()],
+  );
+}
+
+export function loadPreference(key: string): string | null {
+  const rows = db.getAllSync<{ value: string }>(
+    'SELECT value FROM preferences WHERE key = ?',
+    [key],
+  );
+  return rows[0]?.value || null;
+}
+
+export function loadAllPreferences(): Record<string, string> {
+  const rows = db.getAllSync<{ key: string; value: string }>(
+    'SELECT key, value FROM preferences',
+  );
+  const result: Record<string, string> = {};
+  rows.forEach((r) => { result[r.key] = r.value; });
+  return result;
+}
+
+// ===== DOCUMENTS =====
 
 export type Document = {
   id: string;
