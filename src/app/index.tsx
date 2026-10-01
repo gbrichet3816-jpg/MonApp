@@ -4,8 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AGENTS } from '@/agents';
 import {
-  scheduleDailyReminder,
-  scheduleOneTimeReminder,
+  scheduleMultipleDailyReminders,
+  scheduleMultipleOneTimeReminders,
   scheduleRelativeReminder,
 } from '@/agents/sante/reminders';
 import { ImportedFile } from '@/components/chat/FileImporter';
@@ -123,8 +123,8 @@ export default function HomeScreen() {
   const handleToolCalls = async (
     toolCalls: ToolCall[],
     agentId: string,
-  ): Promise<ChatMessage | null> => {
-    let lastMessage: ChatMessage | null = null;
+  ): Promise<ChatMessage[]> => {
+    const resultMessages: ChatMessage[] = [];
 
     for (const call of toolCalls) {
       const args = call.arguments as any;
@@ -138,72 +138,88 @@ export default function HomeScreen() {
           title: args.title,
           content: args.content,
         });
-        lastMessage = {
+        resultMessages.push({
           id: `agent-${Date.now()}-doc`,
           text: `C'est fait ! J'ai créé "${args.title}" dans ta bibliothèque.`,
           isUser: false,
-        };
+        });
       }
 
-      // ===== CREATE DAILY REMINDER =====
-      else if (call.name === 'createDailyReminder') {
+      // ===== CREATE DAILY REMINDERS (tableau) =====
+      else if (call.name === 'createDailyReminders') {
         const medicationName = args.medicationName;
-        const time = args.time;
-        const reminderId = `reminder-${Date.now()}`;
+        const times: string[] = args.times || [];
 
-        const notificationId = await scheduleDailyReminder({
+        if (times.length === 0) continue;
+
+        const baseId = `reminder-${Date.now()}`;
+        const results = await scheduleMultipleDailyReminders({
           medicationName,
-          time,
-          reminderId,
+          times,
+          baseId,
         });
 
-        if (notificationId) {
-          saveReminder({
-            id: reminderId,
-            agentId,
-            medicationName,
-            time,
-            notificationId,
-            reminderType: 'daily',
+        if (results.length > 0) {
+          // Sauvegarde chaque rappel en base
+          results.forEach((r) => {
+            saveReminder({
+              id: r.reminderId,
+              agentId,
+              medicationName,
+              time: r.time,
+              notificationId: r.notificationId,
+              reminderType: 'daily',
+            });
           });
-          lastMessage = {
+
+          // Message de confirmation
+          const timesFormatted = times.map((t) => t.replace(':', 'h')).join(', ');
+          const suffix = times.length > 1 ? 's' : '';
+
+          resultMessages.push({
             id: `agent-${Date.now()}-rem`,
-            text: `C'est noté ! Je te rappellerai tous les jours à ${time.replace(':', 'h')} de prendre ${medicationName}.`,
+            text: `C'est noté ! Je te rappellerai tous les jours à ${timesFormatted} de prendre ${medicationName}. (${times.length} rappel${suffix})`,
             isUser: false,
-          };
+          });
         }
       }
 
-      // ===== CREATE ONE-TIME REMINDER =====
-      else if (call.name === 'createOneTimeReminder') {
+      // ===== CREATE ONE-TIME REMINDERS (tableau) =====
+      else if (call.name === 'createOneTimeReminders') {
         const medicationName = args.medicationName;
-        const dateTime = args.dateTime;
-        const reminderId = `reminder-${Date.now()}`;
+        const dateTimes: string[] = args.dateTimes || [];
 
-        const { notificationId, scheduledAt } = await scheduleOneTimeReminder({
+        if (dateTimes.length === 0) continue;
+
+        const baseId = `reminder-${Date.now()}`;
+        const results = await scheduleMultipleOneTimeReminders({
           medicationName,
-          dateTime,
-          reminderId,
+          dateTimes,
+          baseId,
         });
 
-        if (notificationId && scheduledAt) {
-          const date = new Date(scheduledAt);
-          const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+        if (results.length > 0) {
+          results.forEach((r) => {
+            const date = new Date(r.scheduledAt);
+            const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
 
-          saveReminder({
-            id: reminderId,
-            agentId,
-            medicationName,
-            time: timeStr,
-            notificationId,
-            reminderType: 'onetime',
-            scheduledAt,
+            saveReminder({
+              id: r.reminderId,
+              agentId,
+              medicationName,
+              time: timeStr,
+              notificationId: r.notificationId,
+              reminderType: 'onetime',
+              scheduledAt: r.scheduledAt,
+            });
           });
-          lastMessage = {
+
+          const suffix = results.length > 1 ? 's' : '';
+          resultMessages.push({
             id: `agent-${Date.now()}-rem`,
-            text: `C'est noté ! Je te rappellerai le ${date.toLocaleDateString('fr-FR')} à ${timeStr.replace(':', 'h')} de prendre ${medicationName}.`,
+            text: `C'est noté ! J'ai créé ${results.length} rappel${suffix} pour ${medicationName}.`,
             isUser: false,
-          };
+          });
         }
       }
 
@@ -235,40 +251,40 @@ export default function HomeScreen() {
             reminderType: 'relative',
             scheduledAt,
           });
-          lastMessage = {
+          resultMessages.push({
             id: `agent-${Date.now()}-rem`,
             text: `D'accord ! Je te rappelle dans ${label} pour ${medicationName}.`,
             isUser: false,
-          };
+          });
         }
       }
 
       // ===== SAVE PREFERENCE =====
       else if (call.name === 'saveUserPreference') {
         savePreference(args.preferenceKey, args.preferenceValue);
-        lastMessage = {
+        resultMessages.push({
           id: `agent-${Date.now()}-pref`,
           text: `C'est noté ! J'ai bien enregistré ta préférence.`,
           isUser: false,
-        };
+        });
       }
 
-      // ===== CANCEL REMINDER =====
-      else if (call.name === 'cancelReminder') {
+      // ===== CANCEL REMINDERS =====
+      else if (call.name === 'cancelReminders') {
         if (args.medicationName) {
           deactivateRemindersByName(agentId, args.medicationName);
-          lastMessage = {
+          resultMessages.push({
             id: `agent-${Date.now()}-cancel`,
             text: `C'est fait ! J'ai annulé les rappels pour ${args.medicationName}.`,
             isUser: false,
-          };
+          });
         } else {
           deactivateAllReminders(agentId);
-          lastMessage = {
+          resultMessages.push({
             id: `agent-${Date.now()}-cancel`,
             text: `C'est fait ! J'ai annulé tous tes rappels.`,
             isUser: false,
-          };
+          });
         }
       }
 
@@ -276,25 +292,25 @@ export default function HomeScreen() {
       else if (call.name === 'listReminders') {
         const reminders = loadReminders(agentId);
         if (reminders.length === 0) {
-          lastMessage = {
+          resultMessages.push({
             id: `agent-${Date.now()}-list`,
             text: `Tu n'as aucun rappel actif pour le moment.`,
             isUser: false,
-          };
+          });
         } else {
           const list = reminders
             .map((r) => `• ${r.medication_name} à ${r.time.replace(':', 'h')} (${r.reminder_type === 'daily' ? 'tous les jours' : r.reminder_type === 'onetime' ? 'une fois' : 'relatif'})`)
             .join('\n');
-          lastMessage = {
+          resultMessages.push({
             id: `agent-${Date.now()}-list`,
             text: `Voici tes rappels actifs :\n\n${list}`,
             isUser: false,
-          };
+          });
         }
       }
     }
 
-    return lastMessage;
+    return resultMessages;
   };
 
   const selectedAgent = AGENTS.find((a) => a.id === selectedAgentId);
@@ -318,7 +334,6 @@ export default function HomeScreen() {
       isUser: true,
     });
 
-    // Réponse à un rappel en attente
     if (selectedAgent.id === 'sante') {
       const remindersToAsk = findRemindersToAsk('sante');
       if (remindersToAsk.length > 0) {
@@ -346,22 +361,26 @@ export default function HomeScreen() {
         messages: apiMessages,
         agentSystemPrompt: selectedAgent.systemPrompt,
         enableTools: (selectedAgent as any).enableTools === true,
+        agentId: selectedAgent.id,
       });
 
       if (!isMounted.current) return;
 
       if (result.toolCalls && result.toolCalls.length > 0) {
-        const toolMessage = await handleToolCalls(result.toolCalls, selectedAgent.id);
-        if (toolMessage) {
-          setMessages((prev) => [...prev, toolMessage]);
+        const toolMessages = await handleToolCalls(result.toolCalls, selectedAgent.id);
+
+        // Affiche les messages de confirmation des tools
+        toolMessages.forEach((msg) => {
+          setMessages((prev) => [...prev, msg]);
           saveMessage({
-            id: toolMessage.id,
+            id: msg.id,
             agentId: selectedAgent.id,
-            text: toolMessage.text,
+            text: msg.text,
             isUser: false,
           });
-        }
+        });
 
+        // Affiche aussi le texte de DeepSeek s'il y en a
         if (result.reply) {
           const replyMessage: ChatMessage = {
             id: `agent-reply-${Date.now()}`,
@@ -477,6 +496,7 @@ export default function HomeScreen() {
         messages: apiMessages,
         agentSystemPrompt: selectedAgent.systemPrompt,
         enableTools: (selectedAgent as any).enableTools === true,
+        agentId: selectedAgent.id,
       });
 
       if (!isMounted.current) return;
@@ -576,6 +596,7 @@ export default function HomeScreen() {
         messages: apiMessages,
         agentSystemPrompt: selectedAgent.systemPrompt,
         enableTools: (selectedAgent as any).enableTools === true,
+        agentId: selectedAgent.id,
       });
 
       if (!isMounted.current) return;

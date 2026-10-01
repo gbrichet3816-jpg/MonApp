@@ -53,6 +53,36 @@ export async function scheduleDailyReminder({
   }
 }
 
+// Plusieurs rappels QUOTIDIENS d'un coup
+export async function scheduleMultipleDailyReminders({
+  medicationName,
+  times,
+  baseId,
+}: {
+  medicationName: string;
+  times: string[];
+  baseId: string;
+}): Promise<{ time: string; notificationId: string; reminderId: string }[]> {
+  const results: { time: string; notificationId: string; reminderId: string }[] = [];
+
+  for (let i = 0; i < times.length; i++) {
+    const time = times[i];
+    const reminderId = `${baseId}-${i}`;
+
+    const notificationId = await scheduleDailyReminder({
+      medicationName,
+      time,
+      reminderId,
+    });
+
+    if (notificationId) {
+      results.push({ time, notificationId, reminderId });
+    }
+  }
+
+  return results;
+}
+
 // Rappel UNIQUE (une seule fois à une date précise)
 export async function scheduleOneTimeReminder({
   medicationName,
@@ -88,6 +118,36 @@ export async function scheduleOneTimeReminder({
     console.error('Erreur programmation rappel unique:', error);
     return { notificationId: null, scheduledAt: null };
   }
+}
+
+// Plusieurs rappels UNIQUES d'un coup
+export async function scheduleMultipleOneTimeReminders({
+  medicationName,
+  dateTimes,
+  baseId,
+}: {
+  medicationName: string;
+  dateTimes: string[];
+  baseId: string;
+}): Promise<{ dateTime: string; notificationId: string; reminderId: string; scheduledAt: number }[]> {
+  const results: { dateTime: string; notificationId: string; reminderId: string; scheduledAt: number }[] = [];
+
+  for (let i = 0; i < dateTimes.length; i++) {
+    const dateTime = dateTimes[i];
+    const reminderId = `${baseId}-${i}`;
+
+    const { notificationId, scheduledAt } = await scheduleOneTimeReminder({
+      medicationName,
+      dateTime,
+      reminderId,
+    });
+
+    if (notificationId && scheduledAt) {
+      results.push({ dateTime, notificationId, reminderId, scheduledAt });
+    }
+  }
+
+  return results;
 }
 
 // Rappel RELATIF (dans X minutes)

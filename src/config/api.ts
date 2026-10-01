@@ -27,10 +27,12 @@ export async function sendMessageToAgent({
   messages,
   agentSystemPrompt,
   enableTools = false,
+  agentId,
 }: {
   messages: ApiMessage[];
   agentSystemPrompt?: string;
   enableTools?: boolean;
+  agentId?: string;
 }): Promise<AgentReply> {
   const response = await fetch(`${API_URL}/chat`, {
     method: 'POST',
@@ -41,6 +43,7 @@ export async function sendMessageToAgent({
       messages,
       agentSystemPrompt,
       enableTools,
+      agentId,
     }),
   });
 
