@@ -34,12 +34,21 @@ export function initDatabase() {
       agent_id TEXT NOT NULL,
       title TEXT NOT NULL,
       content TEXT NOT NULL,
+      file_path TEXT,
+      file_type TEXT,
       created_at INTEGER NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_documents_agent
       ON documents (agent_id, created_at);
   `);
+
+  try {
+    db.execSync('ALTER TABLE documents ADD COLUMN file_path TEXT');
+  } catch (e) {}
+  try {
+    db.execSync('ALTER TABLE documents ADD COLUMN file_type TEXT');
+  } catch (e) {}
 
   initUserTable();
 }
@@ -175,6 +184,8 @@ export type Document = {
   agentId: string;
   title: string;
   content: string;
+  filePath: string | null;
+  fileType: string | null;
   createdAt: number;
 };
 
@@ -183,15 +194,19 @@ export function saveDocument({
   agentId,
   title,
   content,
+  filePath,
+  fileType,
 }: {
   id: string;
   agentId: string;
   title: string;
   content: string;
+  filePath?: string;
+  fileType?: string;
 }) {
   db.runSync(
-    'INSERT OR REPLACE INTO documents (id, agent_id, title, content, created_at) VALUES (?, ?, ?, ?, ?)',
-    [id, agentId, title, content, Date.now()],
+    'INSERT OR REPLACE INTO documents (id, agent_id, title, content, file_path, file_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [id, agentId, title, content, filePath || null, fileType || null, Date.now()],
   );
 }
 
@@ -201,6 +216,8 @@ export function loadDocuments(): Document[] {
     agent_id: string;
     title: string;
     content: string;
+    file_path: string | null;
+    file_type: string | null;
     created_at: number;
   }>('SELECT * FROM documents ORDER BY created_at DESC');
 
@@ -209,10 +226,20 @@ export function loadDocuments(): Document[] {
     agentId: row.agent_id,
     title: row.title,
     content: row.content,
+    filePath: row.file_path,
+    fileType: row.file_type,
     createdAt: row.created_at,
   }));
 }
 
-export function deleteDocument(id: string) {
+export function deleteDocument(id: string): string | null {
+  const rows = db.getAllSync<{ file_path: string | null }>(
+    'SELECT file_path FROM documents WHERE id = ?',
+    [id],
+  );
+  const filePath = rows[0]?.file_path || null;
+
   db.runSync('DELETE FROM documents WHERE id = ?', [id]);
+
+  return filePath;
 }

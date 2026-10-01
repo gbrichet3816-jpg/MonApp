@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -19,10 +20,10 @@ import {
   loadDocuments,
   saveDocument,
 } from '@/config/database';
+import { deleteFileFromDocuments } from '@/config/files';
 import {
   printPdf,
   saveMultiplePdfs,
-  savePdfToDevice,
   shareMultiplePdfs,
   sharePdf,
 } from '@/config/pdf';
@@ -176,8 +177,13 @@ export default function LibraryScreen() {
         {
           text: 'Supprimer',
           style: 'destructive',
-          onPress: () => {
-            selectedIds.forEach((id) => deleteDocument(id));
+          onPress: async () => {
+            for (const id of selectedIds) {
+              const filePath = deleteDocument(id);
+              if (filePath) {
+                await deleteFileFromDocuments(filePath);
+              }
+            }
             exitSelectionMode();
             loadAll();
           },
@@ -250,6 +256,8 @@ export default function LibraryScreen() {
         toCodes: friendCodes,
         title: doc.title,
         content: doc.content,
+        fileData: undefined,
+        fileType: doc.fileType || undefined,
       });
       if (result.success) successCount++;
       else failCount++;
@@ -275,8 +283,11 @@ export default function LibraryScreen() {
         {
           text: 'Supprimer',
           style: 'destructive',
-          onPress: () => {
-            deleteDocument(doc.id);
+          onPress: async () => {
+            const filePath = deleteDocument(doc.id);
+            if (filePath) {
+              await deleteFileFromDocuments(filePath);
+            }
             setSelectedDoc(null);
             loadAll();
           },
@@ -301,20 +312,6 @@ export default function LibraryScreen() {
       agentId: doc.agentId,
     });
     if (!success) Alert.alert('Erreur', 'Impossible de partager.');
-  };
-
-  const handleSaveSingle = async (doc: Document) => {
-    const result = await savePdfToDevice({
-      title: doc.title,
-      content: doc.content,
-      agentId: doc.agentId,
-    });
-
-    if (result.success) {
-      Alert.alert('Enregistré !', 'Le PDF est enregistré.');
-    } else {
-      Alert.alert('Erreur', "Impossible d'enregistrer.");
-    }
   };
 
   const handleShareSingleToFriends = () => {
@@ -348,6 +345,8 @@ export default function LibraryScreen() {
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => {
             const isSelected = selectedIds.includes(item.id);
+            const isImage = item.fileType?.startsWith('image/') && item.filePath;
+
             return (
               <TouchableOpacity
                 style={[styles.docItem, isSelected && styles.docItemSelected]}
@@ -360,11 +359,22 @@ export default function LibraryScreen() {
                     color={isSelected ? Colors.light.primary : Colors.light.textSecondary}
                   />
                 </View>
-                <Ionicons name="document-text-outline" size={24} color={Colors.light.primary} />
+
+                {isImage ? (
+                  <Image
+                    source={{ uri: item.filePath! }}
+                    style={styles.docThumbnail}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Ionicons name="document-text-outline" size={24} color={Colors.light.primary} />
+                )}
+
                 <View style={styles.docItemText}>
                   <Text style={styles.docItemTitle} numberOfLines={1}>{item.title}</Text>
                   <Text style={styles.docItemMeta}>
                     {formatDate(item.createdAt)} · {item.agentId}
+                    {item.fileType ? ' · 📎' : ''}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -422,6 +432,8 @@ export default function LibraryScreen() {
 
   // ===== DÉTAIL D'UN DOCUMENT =====
   if (selectedDoc) {
+    const isImage = selectedDoc.fileType?.startsWith('image/') && selectedDoc.filePath;
+
     return (
       <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
         <View style={styles.header}>
@@ -442,7 +454,25 @@ export default function LibraryScreen() {
               <Text style={styles.docMeta}>
                 {formatDate(item.createdAt)} · {item.agentId}
               </Text>
-              <Text style={styles.docText}>{item.content}</Text>
+
+              {isImage && (
+                <Image
+                  source={{ uri: item.filePath! }}
+                  style={styles.docFullImage}
+                  resizeMode="contain"
+                />
+              )}
+
+              {item.filePath && !isImage && (
+                <View style={styles.fileInfo}>
+                  <Ionicons name="document" size={32} color={Colors.light.primary} />
+                  <Text style={styles.fileInfoText}>Fichier attaché</Text>
+                </View>
+              )}
+
+              {item.content ? (
+                <Text style={styles.docText}>{item.content}</Text>
+              ) : null}
             </View>
           )}
         />
@@ -451,11 +481,6 @@ export default function LibraryScreen() {
           <TouchableOpacity style={styles.actionButton} onPress={handleShareSingleToFriends}>
             <Ionicons name="people-outline" size={20} color={Colors.light.background} />
             <Text style={styles.actionButtonText}>Amis</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.actionButton} onPress={() => handleSaveSingle(selectedDoc)}>
-            <Ionicons name="download-outline" size={20} color={Colors.light.background} />
-            <Text style={styles.actionButtonText}>Enreg.</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.actionButton} onPress={() => handlePrint(selectedDoc)}>
@@ -559,22 +584,35 @@ export default function LibraryScreen() {
             </View>
           ) : null
         }
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.docItem}
-            onPress={() => handlePress(item)}
-            onLongPress={() => handleLongPress(item)}
-          >
-            <Ionicons name="document-text-outline" size={24} color={Colors.light.primary} />
-            <View style={styles.docItemText}>
-              <Text style={styles.docItemTitle} numberOfLines={1}>{item.title}</Text>
-              <Text style={styles.docItemMeta}>
-                {formatDate(item.createdAt)} · {item.agentId}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
-          </TouchableOpacity>
-        )}
+        renderItem={({ item }) => {
+          const isImage = item.fileType?.startsWith('image/') && item.filePath;
+
+          return (
+            <TouchableOpacity
+              style={styles.docItem}
+              onPress={() => handlePress(item)}
+              onLongPress={() => handleLongPress(item)}
+            >
+              {isImage ? (
+                <Image
+                  source={{ uri: item.filePath! }}
+                  style={styles.docThumbnail}
+                  resizeMode="cover"
+                />
+              ) : (
+                <Ionicons name="document-text-outline" size={24} color={Colors.light.primary} />
+              )}
+              <View style={styles.docItemText}>
+                <Text style={styles.docItemTitle} numberOfLines={1}>{item.title}</Text>
+                <Text style={styles.docItemMeta}>
+                  {formatDate(item.createdAt)} · {item.agentId}
+                  {item.fileType ? ' · 📎' : ''}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={Colors.light.textSecondary} />
+            </TouchableOpacity>
+          );
+        }}
       />
     </SafeAreaView>
   );
@@ -690,6 +728,12 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: Colors.light.primary,
   },
+  docThumbnail: {
+    width: 44,
+    height: 44,
+    borderRadius: Spacing.two,
+    backgroundColor: Colors.light.backgroundElement,
+  },
   checkbox: { padding: Spacing.half },
   docItemText: { flex: 1 },
   docItemTitle: {
@@ -707,6 +751,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.light.textSecondary,
     marginBottom: Spacing.three,
+  },
+  docFullImage: {
+    width: '100%',
+    height: 300,
+    borderRadius: Spacing.two,
+    backgroundColor: Colors.light.backgroundElement,
+    marginBottom: Spacing.three,
+  },
+  fileInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    padding: Spacing.three,
+    backgroundColor: Colors.light.backgroundElement,
+    borderRadius: Spacing.two,
+    marginBottom: Spacing.three,
+  },
+  fileInfoText: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    fontStyle: 'italic',
   },
   docText: {
     fontSize: 16,
