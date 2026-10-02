@@ -413,7 +413,7 @@ export default function HomeScreen() {
   };
 
   // ============================================================
-  // EXECUTION DES TOOLS + HANDLERS
+  // EXECUTION UNIVERSELLE DES TOOLS
   // ============================================================
 
   const executeToolCall = async (call: ToolCall, agentId: string): Promise<string> => {
@@ -421,16 +421,15 @@ export default function HomeScreen() {
     console.log('🔧 Exécution du tool:', call.name, args);
 
     try {
-      if (call.name === 'listGrades') {
-        const profDb = await openProfDatabase();
-        const profile = getLocalProfile();
-        const userId = profile?.code ?? 'default';
-        const events = await getEventsWithGrades(profDb, userId);
+      const profDb = await openProfDatabase();
+      const profile = getLocalProfile();
+      const userId = profile?.code ?? 'default';
 
+      if (call.name === 'listGrades') {
+        const events = await getEventsWithGrades(profDb, userId);
         if (events.length === 0) {
           return 'Aucune note enregistrée pour cet enfant pour le moment.';
         }
-
         const lines: string[] = ['Notes enregistrées :', ''];
         const bySubject: Record<string, any[]> = {};
         for (const e of events) {
@@ -438,7 +437,6 @@ export default function HomeScreen() {
           if (!bySubject[subject]) bySubject[subject] = [];
           bySubject[subject].push(e);
         }
-
         for (const [subject, list] of Object.entries(bySubject)) {
           let totalPoints = 0;
           let totalMax = 0;
@@ -458,9 +456,6 @@ export default function HomeScreen() {
       }
 
       if (call.name === 'getSchedule') {
-        const profDb = await openProfDatabase();
-        const profile = getLocalProfile();
-        const userId = profile?.code ?? 'default';
         const schedule = await getSchedule(profDb, userId);
         if (schedule.length === 0) return 'Aucun emploi du temps enregistré.';
         const dayNames = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
@@ -479,211 +474,193 @@ export default function HomeScreen() {
         return lines.join('\n');
       }
 
+      if (call.name === 'getWeather') {
+        const city = args.city || (await getProfProfile(profDb, userId))?.weather_city;
+        if (!city) {
+          return 'Aucune ville renseignée. Demande à l\'enfant dans quelle ville il habite.';
+        }
+        const weather = await fetchWeather(profDb, userId, city, true);
+        if (!weather) {
+          return `Impossible de récupérer la météo pour ${city}.`;
+        }
+        return formatWeatherForPrompt(weather);
+      }
+
+      if (call.name === 'updateWeatherCity') {
+        const city = args.city?.trim();
+        if (city) {
+          await setWeatherCity(profDb, userId, city);
+          return `Ville mise à jour : ${city}`;
+        }
+        return 'Aucune ville fournie.';
+      }
+
+      if (call.name === 'saveGrade') {
+        const grade = parseFloat(args.grade);
+        const gradeMax = parseFloat(args.grade_max);
+        if (isNaN(grade) || isNaN(gradeMax)) {
+          return 'Note invalide.';
+        }
+        const eventId = parseInt(args.eventId);
+        if (!isNaN(eventId) && eventId > 0) {
+          await saveEventGrade(profDb, eventId, grade, gradeMax);
+          return `Note enregistrée : ${grade}/${gradeMax}`;
+        } else {
+          await addProfEvent(profDb, {
+            user_id: userId,
+            type: 'controle',
+            subject: args.subject || 'Matière inconnue',
+            title: args.title || 'Contrôle',
+            due_date: Date.now() - 3 * 24 * 60 * 60 * 1000,
+            done: 1,
+          });
+          const allEvents = await getEventsWithGrades(profDb, userId);
+          const lastEvent = allEvents[0];
+          if (lastEvent && lastEvent.id !== undefined) {
+            await saveEventGrade(profDb, lastEvent.id, grade, gradeMax);
+          }
+          return `Note enregistrée : ${grade}/${gradeMax}`;
+        }
+      }
+
+      if (call.name === 'saveTopicProgress') {
+        await saveTopicProgress(profDb, userId, args.subject, args.topic, args.result);
+        return `Notion enregistrée : ${args.subject} - ${args.topic} (${args.result})`;
+      }
+
+      if (call.name === 'saveProfEvent') {
+        const dueDate = new Date(args.due_date);
+        if (!isNaN(dueDate.getTime())) {
+          await addProfEvent(profDb, {
+            user_id: userId,
+            type: args.type,
+            subject: args.subject,
+            title: args.title,
+            due_date: dueDate.getTime(),
+          });
+          return `Événement enregistré : ${args.title} le ${dueDate.toLocaleDateString('fr-FR')}`;
+        }
+        return 'Date invalide.';
+      }
+
+      if (call.name === 'saveScheduleFromImage') {
+        await clearSchedule(profDb, userId);
+        for (const item of args.items) {
+          await addScheduleItem(profDb, {
+            user_id: userId,
+            day_of_week: item.day_of_week,
+            start_time: item.start_time,
+            end_time: item.end_time,
+            subject: item.subject,
+            room: item.room,
+            teacher: item.teacher,
+          });
+        }
+        try {
+          const state = await getProfState(profDb, userId);
+          if (!state.morning_briefing_enabled) {
+            await scheduleMorningBriefing(profDb, userId, 7, 30);
+          }
+          if (!state.evening_briefing_enabled) {
+            const profileFull = await getProfProfile(profDb, userId);
+            const level = profileFull?.child_level ?? null;
+            const { hour, minute } = getDefaultEveningHour(level);
+            await scheduleEveningBriefing(profDb, userId, hour, minute);
+          }
+        } catch (e) { console.warn('[Prof] Planification briefings:', e); }
+        return `Emploi du temps enregistré : ${args.items.length} cours`;
+      }
+
+      if (call.name === 'updateEveningBriefing') {
+        await updateEveningBriefingTime(profDb, userId, args.hour, args.minute);
+        await scheduleEveningBriefing(profDb, userId, args.hour, args.minute);
+        return `Rappel du soir modifié à ${args.hour}h${args.minute.toString().padStart(2, '0')}`;
+      }
+
+      if (call.name === 'toggleEveningBriefing') {
+        if (args.enabled) {
+          const state = await getProfState(profDb, userId);
+          await scheduleEveningBriefing(profDb, userId, state.evening_briefing_hour, state.evening_briefing_minute);
+          return 'Rappel du soir activé';
+        } else {
+          await cancelEveningBriefing(profDb, userId);
+          return 'Rappel du soir désactivé';
+        }
+      }
+
+      if (call.name === 'createDocument') {
+        const docId = `doc-${Date.now()}`;
+        saveDocument({ id: docId, agentId, title: args.title, content: args.content });
+        return `Document créé : ${args.title}`;
+      }
+
+      if (call.name === 'createDailyReminders') {
+        const times: string[] = args.times || [];
+        if (times.length === 0) return 'Aucun horaire fourni.';
+        const baseId = `reminder-${Date.now()}`;
+        const results = await scheduleMultipleDailyReminders({ medicationName: args.medicationName, times, baseId });
+        results.forEach((r) => {
+          saveReminder({ id: r.reminderId, agentId, medicationName: args.medicationName, time: r.time, notificationId: r.notificationId, reminderType: 'daily' });
+        });
+        return `Rappels créés : ${results.length} à ${times.join(', ')}`;
+      }
+
+      if (call.name === 'createOneTimeReminders') {
+        const dateTimes: string[] = args.dateTimes || [];
+        if (dateTimes.length === 0) return 'Aucune date fournie.';
+        const baseId = `reminder-${Date.now()}`;
+        const results = await scheduleMultipleOneTimeReminders({ medicationName: args.medicationName, dateTimes, baseId });
+        results.forEach((r) => {
+          const date = new Date(r.scheduledAt);
+          const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+          saveReminder({ id: r.reminderId, agentId, medicationName: args.medicationName, time: timeStr, notificationId: r.notificationId, reminderType: 'onetime', scheduledAt: r.scheduledAt });
+        });
+        return `Rappels créés : ${results.length}`;
+      }
+
+      if (call.name === 'createRelativeReminder') {
+        const reminderId = `reminder-${Date.now()}`;
+        const { notificationId, scheduledAt } = await scheduleRelativeReminder({
+          medicationName: args.medicationName,
+          minutesFromNow: args.minutesFromNow,
+          reminderId,
+        });
+        if (notificationId && scheduledAt) {
+          const date = new Date(scheduledAt);
+          const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+          saveReminder({ id: reminderId, agentId, medicationName: args.medicationName, time: timeStr, notificationId, reminderType: 'relative', scheduledAt });
+          return `Rappel créé dans ${args.minutesFromNow} minutes`;
+        }
+        return 'Impossible de créer le rappel.';
+      }
+
+      if (call.name === 'saveUserPreference') {
+        savePreference(args.preferenceKey, args.preferenceValue);
+        return `Préférence enregistrée : ${args.preferenceKey}`;
+      }
+
+      if (call.name === 'cancelReminders') {
+        if (args.medicationName) {
+          deactivateRemindersByName(agentId, args.medicationName);
+          return `Rappels annulés pour ${args.medicationName}`;
+        } else {
+          deactivateAllReminders(agentId);
+          return 'Tous les rappels annulés';
+        }
+      }
+
+      if (call.name === 'listReminders') {
+        const reminders = loadReminders(agentId);
+        if (reminders.length === 0) return 'Aucun rappel actif.';
+        const list = reminders.map((r) => `- ${r.medication_name} à ${r.time.replace(':', 'h')}`).join('\n');
+        return `Rappels actifs :\n${list}`;
+      }
+
       return 'Tool non reconnu : ' + call.name;
     } catch (e) {
       console.warn('[Prof] Erreur execution tool:', e);
       return 'Erreur lors de l\'exécution du tool.';
     }
-  };
-
-  const handleToolCalls = async (toolCalls: ToolCall[], agentId: string): Promise<ChatMessage[]> => {
-    const resultMessages: ChatMessage[] = [];
-
-    for (const call of toolCalls) {
-      const args = call.arguments as any;
-
-      if (call.name === 'createDocument') {
-        const docId = `doc-${Date.now()}`;
-        saveDocument({ id: docId, agentId, title: args.title, content: args.content });
-      } else if (call.name === 'saveTopicProgress') {
-        try {
-          const profDb = await openProfDatabase();
-          const profile = getLocalProfile();
-          const userId = profile?.code ?? 'default';
-          await saveTopicProgress(profDb, userId, args.subject, args.topic, args.result);
-        } catch (e) { console.warn('[Prof] saveTopicProgress:', e); }
-      } else if (call.name === 'saveScheduleFromImage') {
-        try {
-          const profDb = await openProfDatabase();
-          const profile = getLocalProfile();
-          const userId = profile?.code ?? 'default';
-          await clearSchedule(profDb, userId);
-          for (const item of args.items) {
-            await addScheduleItem(profDb, {
-              user_id: userId,
-              day_of_week: item.day_of_week,
-              start_time: item.start_time,
-              end_time: item.end_time,
-              subject: item.subject,
-              room: item.room,
-              teacher: item.teacher,
-            });
-          }
-
-          try {
-            const state = await getProfState(profDb, userId);
-            if (!state.morning_briefing_enabled) {
-              await scheduleMorningBriefing(profDb, userId, 7, 30);
-            }
-            if (!state.evening_briefing_enabled) {
-              const profileFull = await getProfProfile(profDb, userId);
-              const level = profileFull?.child_level ?? null;
-              const { hour, minute } = getDefaultEveningHour(level);
-              await scheduleEveningBriefing(profDb, userId, hour, minute);
-            }
-          } catch (e) { console.warn('[Prof] Planification briefings:', e); }
-        } catch (e) { console.warn('[Prof] saveScheduleFromImage:', e); }
-      } else if (call.name === 'saveProfEvent') {
-        try {
-          const profDb = await openProfDatabase();
-          const profile = getLocalProfile();
-          const userId = profile?.code ?? 'default';
-          const dueDate = new Date(args.due_date);
-          if (!isNaN(dueDate.getTime())) {
-            await addProfEvent(profDb, {
-              user_id: userId,
-              type: args.type,
-              subject: args.subject,
-              title: args.title,
-              due_date: dueDate.getTime(),
-            });
-          }
-        } catch (e) { console.warn('[Prof] saveProfEvent:', e); }
-      } else if (call.name === 'updateEveningBriefing') {
-        try {
-          const profDb = await openProfDatabase();
-          const profile = getLocalProfile();
-          const userId = profile?.code ?? 'default';
-          await updateEveningBriefingTime(profDb, userId, args.hour, args.minute);
-          await scheduleEveningBriefing(profDb, userId, args.hour, args.minute);
-        } catch (e) { console.warn('[Prof] updateEveningBriefing:', e); }
-      } else if (call.name === 'toggleEveningBriefing') {
-        try {
-          const profDb = await openProfDatabase();
-          const profile = getLocalProfile();
-          const userId = profile?.code ?? 'default';
-          if (args.enabled) {
-            const state = await getProfState(profDb, userId);
-            await scheduleEveningBriefing(profDb, userId, state.evening_briefing_hour, state.evening_briefing_minute);
-          } else {
-            await cancelEveningBriefing(profDb, userId);
-          }
-        } catch (e) { console.warn('[Prof] toggleEveningBriefing:', e); }
-      } else if (call.name === 'updateWeatherCity') {
-        try {
-          const profDb = await openProfDatabase();
-          const profile = getLocalProfile();
-          const userId = profile?.code ?? 'default';
-          const city = args.city?.trim();
-          if (city) {
-            await setWeatherCity(profDb, userId, city);
-          }
-        } catch (e) { console.warn('[Prof] updateWeatherCity:', e); }
-      } else if (call.name === 'saveGrade') {
-        try {
-          const profDb = await openProfDatabase();
-          const profile = getLocalProfile();
-          const userId = profile?.code ?? 'default';
-          const grade = parseFloat(args.grade);
-          const gradeMax = parseFloat(args.grade_max);
-
-          if (!isNaN(grade) && !isNaN(gradeMax)) {
-            const eventId = parseInt(args.eventId);
-            if (!isNaN(eventId) && eventId > 0) {
-              await saveEventGrade(profDb, eventId, grade, gradeMax);
-            } else {
-              await addProfEvent(profDb, {
-                user_id: userId,
-                type: 'controle',
-                subject: args.subject || 'Matière inconnue',
-                title: args.title || 'Contrôle',
-                due_date: Date.now() - 3 * 24 * 60 * 60 * 1000,
-                done: 1,
-              });
-              const allEvents = await getEventsWithGrades(profDb, userId);
-              const lastEvent = allEvents[0];
-              if (lastEvent && lastEvent.id !== undefined) {
-                await saveEventGrade(profDb, lastEvent.id, grade, gradeMax);
-              }
-            }
-          }
-        } catch (e) { console.warn('[Prof] saveGrade:', e); }
-      } else if (call.name === 'listGrades') {
-        // Géré dans executeToolCall (boucle tool calling)
-      } else if (call.name === 'createDailyReminders') {
-        const medicationName = args.medicationName;
-        const times: string[] = args.times || [];
-        if (times.length === 0) continue;
-        const baseId = `reminder-${Date.now()}`;
-        const results = await scheduleMultipleDailyReminders({ medicationName, times, baseId });
-        if (results.length > 0) {
-          results.forEach((r) => {
-            saveReminder({ id: r.reminderId, agentId, medicationName, time: r.time, notificationId: r.notificationId, reminderType: 'daily' });
-          });
-          const timesFormatted = times.map((t) => t.replace(':', 'h')).join(', ');
-          resultMessages.push({
-            id: `agent-${Date.now()}-rem`,
-            text: `C'est noté ! Je te rappellerai tous les jours à ${timesFormatted} de prendre ${medicationName}.`,
-            isUser: false,
-          });
-        }
-      } else if (call.name === 'createOneTimeReminders') {
-        const medicationName = args.medicationName;
-        const dateTimes: string[] = args.dateTimes || [];
-        if (dateTimes.length === 0) continue;
-        const baseId = `reminder-${Date.now()}`;
-        const results = await scheduleMultipleOneTimeReminders({ medicationName, dateTimes, baseId });
-        if (results.length > 0) {
-          results.forEach((r) => {
-            const date = new Date(r.scheduledAt);
-            const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-            saveReminder({ id: r.reminderId, agentId, medicationName, time: timeStr, notificationId: r.notificationId, reminderType: 'onetime', scheduledAt: r.scheduledAt });
-          });
-          resultMessages.push({
-            id: `agent-${Date.now()}-rem`,
-            text: `C'est noté ! J'ai créé ${results.length} rappel(s) pour ${medicationName}.`,
-            isUser: false,
-          });
-        }
-      } else if (call.name === 'createRelativeReminder') {
-        const medicationName = args.medicationName;
-        const minutesFromNow = args.minutesFromNow;
-        const reminderId = `reminder-${Date.now()}`;
-        const { notificationId, scheduledAt } = await scheduleRelativeReminder({ medicationName, minutesFromNow, reminderId });
-        if (notificationId && scheduledAt) {
-          const date = new Date(scheduledAt);
-          const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-          const label = minutesFromNow >= 60 ? `${Math.round(minutesFromNow / 60)}h` : `${minutesFromNow} min`;
-          saveReminder({ id: reminderId, agentId, medicationName, time: timeStr, notificationId, reminderType: 'relative', scheduledAt });
-          resultMessages.push({
-            id: `agent-${Date.now()}-rem`,
-            text: `D'accord ! Je te rappelle dans ${label} pour ${medicationName}.`,
-            isUser: false,
-          });
-        }
-      } else if (call.name === 'saveUserPreference') {
-        savePreference(args.preferenceKey, args.preferenceValue);
-        resultMessages.push({ id: `agent-${Date.now()}-pref`, text: `C'est noté !`, isUser: false });
-      } else if (call.name === 'cancelReminders') {
-        if (args.medicationName) {
-          deactivateRemindersByName(agentId, args.medicationName);
-          resultMessages.push({ id: `agent-${Date.now()}-cancel`, text: `C'est fait ! J'ai annulé les rappels pour ${args.medicationName}.`, isUser: false });
-        } else {
-          deactivateAllReminders(agentId);
-          resultMessages.push({ id: `agent-${Date.now()}-cancel`, text: `C'est fait ! J'ai annulé tous tes rappels.`, isUser: false });
-        }
-      } else if (call.name === 'listReminders') {
-        const reminders = loadReminders(agentId);
-        if (reminders.length === 0) {
-          resultMessages.push({ id: `agent-${Date.now()}-list`, text: `Tu n'as aucun rappel actif.`, isUser: false });
-        } else {
-          const list = reminders.map((r) => `• ${r.medication_name} à ${r.time.replace(':', 'h')}`).join('\n');
-          resultMessages.push({ id: `agent-${Date.now()}-list`, text: `Voici tes rappels :\n\n${list}`, isUser: false });
-        }
-      }
-    }
-
-    return resultMessages;
   };
 
   // ============================================================
@@ -829,6 +806,7 @@ export default function HomeScreen() {
       // 🆕 BOUCLE DE TOOL CALLING
       let currentResult = result;
       let loopCount = 0;
+      let messageAlreadyDisplayed = false;
       const MAX_LOOPS = 3;
 
       while (
@@ -856,6 +834,7 @@ export default function HomeScreen() {
           const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
           saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
+          messageAlreadyDisplayed = true;
           currentResult = newResult;
           break;
         }
@@ -863,23 +842,25 @@ export default function HomeScreen() {
         currentResult = newResult;
       }
 
-      // Si après la boucle il n'y a toujours pas de reply → message par défaut
-      if (!currentResult.reply || currentResult.reply.trim().length === 0) {
-        const fallbackMessage: ChatMessage = {
-          id: `agent-${Date.now()}`,
-          text: 'Je n\'ai pas réussi à formuler une réponse. Réessaie avec un autre message 😅',
-          isUser: false,
-        };
-        setMessages((prev) => [...prev, fallbackMessage]);
-        saveMessage({ id: fallbackMessage.id, agentId: selectedAgent.id, text: fallbackMessage.text, isUser: false });
-      } else if (!currentResult.toolCalls || currentResult.toolCalls.length === 0) {
-        const agentMessage: ChatMessage = {
-          id: `agent-${Date.now()}`,
-          text: currentResult.reply,
-          isUser: false,
-        };
-        setMessages((prev) => [...prev, agentMessage]);
-        saveMessage({ id: agentMessage.id, agentId: selectedAgent.id, text: agentMessage.text, isUser: false });
+      // 🆕 AFFICHER UNIQUEMENT SI ON N'A PAS DÉJÀ AFFICHÉ
+      if (!messageAlreadyDisplayed) {
+        if (!currentResult.reply || currentResult.reply.trim().length === 0) {
+          const fallbackMessage: ChatMessage = {
+            id: `agent-${Date.now()}`,
+            text: 'Je n\'ai pas réussi à formuler une réponse. Réessaie avec un autre message 😅',
+            isUser: false,
+          };
+          setMessages((prev) => [...prev, fallbackMessage]);
+          saveMessage({ id: fallbackMessage.id, agentId: selectedAgent.id, text: fallbackMessage.text, isUser: false });
+        } else if (!currentResult.toolCalls || currentResult.toolCalls.length === 0) {
+          const agentMessage: ChatMessage = {
+            id: `agent-${Date.now()}`,
+            text: currentResult.reply,
+            isUser: false,
+          };
+          setMessages((prev) => [...prev, agentMessage]);
+          saveMessage({ id: agentMessage.id, agentId: selectedAgent.id, text: agentMessage.text, isUser: false });
+        }
       }
     } catch (error) {
       if (!isMounted.current) return;
@@ -988,22 +969,51 @@ export default function HomeScreen() {
 
       if (!isMounted.current) return;
 
-      if (result.toolCalls && result.toolCalls.length > 0) {
-        await handleToolCalls(result.toolCalls, selectedAgent.id);
-        const finalText = result.reply && result.reply.trim().length > 0 ? result.reply : null;
-        if (finalText) {
-          const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: finalText, isUser: false };
+      let currentResult = result;
+      let loopCount = 0;
+      let messageAlreadyDisplayed = false;
+      const MAX_LOOPS = 3;
+
+      while (currentResult.toolCalls && currentResult.toolCalls.length > 0 && loopCount < MAX_LOOPS) {
+        loopCount++;
+        const firstTool = currentResult.toolCalls[0];
+        const toolResult = await executeToolCall(firstTool, selectedAgent.id);
+        const newResult = await sendToolResultToAgent({
+          messages: apiMessages,
+          toolCall: firstTool,
+          toolResult,
+          agentSystemPrompt: selectedAgent.systemPrompt,
+          agentId: selectedAgent.id,
+        });
+        if (newResult.reply && newResult.reply.trim().length > 0) {
+          const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
           saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
+          messageAlreadyDisplayed = true;
+          currentResult = newResult;
+          break;
         }
-      } else {
-        const agentMessage: ChatMessage = {
-          id: `agent-${Date.now()}`,
-          text: result.reply || '(pas de réponse)',
-          isUser: false,
-        };
-        setMessages((prev) => [...prev, agentMessage]);
-        saveMessage({ id: agentMessage.id, agentId: selectedAgent.id, text: agentMessage.text, isUser: false });
+        currentResult = newResult;
+      }
+
+      if (!messageAlreadyDisplayed) {
+        if (!currentResult.reply || currentResult.reply.trim().length === 0) {
+          const fallbackMessage: ChatMessage = {
+            id: `agent-${Date.now()}`,
+            text: 'Je n\'ai pas réussi à formuler une réponse. Réessaie 😅',
+            isUser: false,
+          };
+          setMessages((prev) => [...prev, fallbackMessage]);
+          saveMessage({ id: fallbackMessage.id, agentId: selectedAgent.id, text: fallbackMessage.text, isUser: false });
+        } else if (!currentResult.toolCalls || currentResult.toolCalls.length === 0) {
+          const agentMessage: ChatMessage = {
+            id: `agent-${Date.now()}`,
+            text: currentResult.reply,
+            isUser: false,
+          };
+          setMessages((prev) => [...prev, agentMessage]);
+          saveMessage({ id: agentMessage.id, agentId: selectedAgent.id, text: agentMessage.text, isUser: false });
+        }
       }
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -1090,22 +1100,51 @@ export default function HomeScreen() {
 
       if (!isMounted.current) return;
 
-      if (result.toolCalls && result.toolCalls.length > 0) {
-        await handleToolCalls(result.toolCalls, selectedAgent.id);
-        const finalText = result.reply && result.reply.trim().length > 0 ? result.reply : null;
-        if (finalText) {
-          const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: finalText, isUser: false };
+      let currentResult = result;
+      let loopCount = 0;
+      let messageAlreadyDisplayed = false;
+      const MAX_LOOPS = 3;
+
+      while (currentResult.toolCalls && currentResult.toolCalls.length > 0 && loopCount < MAX_LOOPS) {
+        loopCount++;
+        const firstTool = currentResult.toolCalls[0];
+        const toolResult = await executeToolCall(firstTool, selectedAgent.id);
+        const newResult = await sendToolResultToAgent({
+          messages: apiMessages,
+          toolCall: firstTool,
+          toolResult,
+          agentSystemPrompt: selectedAgent.systemPrompt,
+          agentId: selectedAgent.id,
+        });
+        if (newResult.reply && newResult.reply.trim().length > 0) {
+          const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
           saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
+          messageAlreadyDisplayed = true;
+          currentResult = newResult;
+          break;
         }
-      } else {
-        const agentMessage: ChatMessage = {
-          id: `agent-${Date.now()}`,
-          text: result.reply || '(pas de réponse)',
-          isUser: false,
-        };
-        setMessages((prev) => [...prev, agentMessage]);
-        saveMessage({ id: agentMessage.id, agentId: selectedAgent.id, text: agentMessage.text, isUser: false });
+        currentResult = newResult;
+      }
+
+      if (!messageAlreadyDisplayed) {
+        if (!currentResult.reply || currentResult.reply.trim().length === 0) {
+          const fallbackMessage: ChatMessage = {
+            id: `agent-${Date.now()}`,
+            text: 'Je n\'ai pas réussi à formuler une réponse. Réessaie 😅',
+            isUser: false,
+          };
+          setMessages((prev) => [...prev, fallbackMessage]);
+          saveMessage({ id: fallbackMessage.id, agentId: selectedAgent.id, text: fallbackMessage.text, isUser: false });
+        } else if (!currentResult.toolCalls || currentResult.toolCalls.length === 0) {
+          const agentMessage: ChatMessage = {
+            id: `agent-${Date.now()}`,
+            text: currentResult.reply,
+            isUser: false,
+          };
+          setMessages((prev) => [...prev, agentMessage]);
+          saveMessage({ id: agentMessage.id, agentId: selectedAgent.id, text: agentMessage.text, isUser: false });
+        }
       }
     } catch (error) {
       const errorMessage: ChatMessage = {
