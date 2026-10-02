@@ -88,7 +88,6 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
       ON prof_topics(user_id, next_review_at);
   `);
 
-  // 🆕 prof_state avec morning_briefing_hour
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS prof_state (
       user_id TEXT PRIMARY KEY,
@@ -98,23 +97,35 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
       morning_briefing_minute INTEGER DEFAULT 30,
       morning_briefing_enabled INTEGER DEFAULT 0,
       morning_briefing_notification_id TEXT,
+      last_evening_briefing_at INTEGER,
+      evening_briefing_hour INTEGER DEFAULT 18,
+      evening_briefing_minute INTEGER DEFAULT 30,
+      evening_briefing_enabled INTEGER DEFAULT 0,
+      evening_briefing_notification_id TEXT,
       updated_at INTEGER NOT NULL
     );
   `);
 
-  // Migration : si la table existe sans les nouvelles colonnes, on les ajoute
-  try {
-    await db.execAsync(`ALTER TABLE prof_state ADD COLUMN morning_briefing_hour INTEGER DEFAULT 7;`);
-  } catch (e) { /* colonne existe déjà */ }
-  try {
-    await db.execAsync(`ALTER TABLE prof_state ADD COLUMN morning_briefing_minute INTEGER DEFAULT 30;`);
-  } catch (e) { /* colonne existe déjà */ }
-  try {
-    await db.execAsync(`ALTER TABLE prof_state ADD COLUMN morning_briefing_enabled INTEGER DEFAULT 0;`);
-  } catch (e) { /* colonne existe déjà */ }
-  try {
-    await db.execAsync(`ALTER TABLE prof_state ADD COLUMN morning_briefing_notification_id TEXT;`);
-  } catch (e) { /* colonne existe déjà */ }
+  // Migrations (si la table existe déjà avec une ancienne version)
+  const migrations = [
+    `ALTER TABLE prof_state ADD COLUMN morning_briefing_hour INTEGER DEFAULT 7;`,
+    `ALTER TABLE prof_state ADD COLUMN morning_briefing_minute INTEGER DEFAULT 30;`,
+    `ALTER TABLE prof_state ADD COLUMN morning_briefing_enabled INTEGER DEFAULT 0;`,
+    `ALTER TABLE prof_state ADD COLUMN morning_briefing_notification_id TEXT;`,
+    `ALTER TABLE prof_state ADD COLUMN last_evening_briefing_at INTEGER;`,
+    `ALTER TABLE prof_state ADD COLUMN evening_briefing_hour INTEGER DEFAULT 18;`,
+    `ALTER TABLE prof_state ADD COLUMN evening_briefing_minute INTEGER DEFAULT 30;`,
+    `ALTER TABLE prof_state ADD COLUMN evening_briefing_enabled INTEGER DEFAULT 0;`,
+    `ALTER TABLE prof_state ADD COLUMN evening_briefing_notification_id TEXT;`,
+  ];
+
+  for (const sql of migrations) {
+    try {
+      await db.execAsync(sql);
+    } catch (e) {
+      // Colonne existe déjà : on ignore
+    }
+  }
 }
 
 // ============================================================
@@ -253,6 +264,24 @@ export async function getUpcomingEvents(db: SQLite.SQLiteDatabase, userId: strin
   return await db.getAllAsync<ProfEvent>(`SELECT * FROM prof_events WHERE user_id = ? AND done = 0 AND due_date >= ? ORDER BY due_date ASC LIMIT ?`, [userId, Date.now(), limit]);
 }
 
+/**
+ * 🆕 Récupère les événements prévus pour une date précise (par défaut demain).
+ */
+export async function getEventsForDate(db: SQLite.SQLiteDatabase, userId: string, date: Date): Promise<ProfEvent[]> {
+  const startOfDay = new Date(date);
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const endOfDay = new Date(date);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  return await db.getAllAsync<ProfEvent>(
+    `SELECT * FROM prof_events
+     WHERE user_id = ? AND done = 0 AND due_date BETWEEN ? AND ?
+     ORDER BY due_date ASC`,
+    [userId, startOfDay.getTime(), endOfDay.getTime()]
+  );
+}
+
 export async function markEventDone(db: SQLite.SQLiteDatabase, eventId: number): Promise<void> {
   await db.runAsync('UPDATE prof_events SET done = 1 WHERE id = ?', [eventId]);
 }
@@ -326,12 +355,25 @@ export async function getTopicsToReview(db: SQLite.SQLiteDatabase, userId: strin
   return await db.getAllAsync<ProfTopic>(`SELECT * FROM prof_topics WHERE user_id = ? AND next_review_at <= ? AND status != 'acquired' ORDER BY next_review_at ASC LIMIT 5`, [userId, Date.now()]);
 }
 
+/**
+ * 🆕 Récupère uniquement les notions "fragiles" (pour le rappel du soir).
+ */
+export async function getFragileTopics(db: SQLite.SQLiteDatabase, userId: string): Promise<ProfTopic[]> {
+  return await db.getAllAsync<ProfTopic>(
+    `SELECT * FROM prof_topics
+     WHERE user_id = ? AND status = 'fragile'
+     ORDER BY last_seen ASC
+     LIMIT 3`,
+    [userId]
+  );
+}
+
 export async function deleteTopic(db: SQLite.SQLiteDatabase, topicId: number): Promise<void> {
   await db.runAsync('DELETE FROM prof_topics WHERE id = ?', [topicId]);
 }
 
 // ============================================================
-// ÉTAT GÉNÉRAL (propositions spontanées + rappel du matin)
+// ÉTAT GÉNÉRAL
 // ============================================================
 
 export interface ProfState {
@@ -342,6 +384,11 @@ export interface ProfState {
   morning_briefing_minute: number;
   morning_briefing_enabled: number;
   morning_briefing_notification_id: string | null;
+  last_evening_briefing_at: number | null;
+  evening_briefing_hour: number;
+  evening_briefing_minute: number;
+  evening_briefing_enabled: number;
+  evening_briefing_notification_id: string | null;
   updated_at: number;
 }
 
@@ -351,7 +398,7 @@ export async function getProfState(db: SQLite.SQLiteDatabase, userId: string): P
   if (!state) {
     const now = Date.now();
     await db.runAsync(
-      `INSERT INTO prof_state (user_id, last_review_offer_at, last_morning_briefing_at, morning_briefing_hour, morning_briefing_minute, morning_briefing_enabled, morning_briefing_notification_id, updated_at) VALUES (?, NULL, NULL, 7, 30, 0, NULL, ?)`,
+      `INSERT INTO prof_state (user_id, updated_at) VALUES (?, ?)`,
       [userId, now]
     );
     state = {
@@ -362,6 +409,11 @@ export async function getProfState(db: SQLite.SQLiteDatabase, userId: string): P
       morning_briefing_minute: 30,
       morning_briefing_enabled: 0,
       morning_briefing_notification_id: null,
+      last_evening_briefing_at: null,
+      evening_briefing_hour: 18,
+      evening_briefing_minute: 30,
+      evening_briefing_enabled: 0,
+      evening_briefing_notification_id: null,
       updated_at: now,
     };
   }
@@ -385,9 +437,6 @@ export async function canOfferReviewToday(db: SQLite.SQLiteDatabase, userId: str
   return state.last_review_offer_at < twentyHoursAgo;
 }
 
-/**
- * 🆕 Marque que le briefing du matin a été envoyé.
- */
 export async function markMorningBriefingSent(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   const now = Date.now();
   await db.runAsync(
@@ -397,16 +446,11 @@ export async function markMorningBriefingSent(db: SQLite.SQLiteDatabase, userId:
   );
 }
 
-/**
- * 🆕 Vérifie si le briefing du matin a déjà été envoyé aujourd'hui.
- */
 export async function wasMorningBriefingSentToday(db: SQLite.SQLiteDatabase, userId: string): Promise<boolean> {
   const state = await getProfState(db, userId);
   if (!state.last_morning_briefing_at) return false;
-
   const lastDate = new Date(state.last_morning_briefing_at);
   const today = new Date();
-
   return (
     lastDate.getDate() === today.getDate() &&
     lastDate.getMonth() === today.getMonth() &&
@@ -414,16 +458,7 @@ export async function wasMorningBriefingSentToday(db: SQLite.SQLiteDatabase, use
   );
 }
 
-/**
- * 🆕 Active le briefing du matin et enregistre les paramètres.
- */
-export async function enableMorningBriefing(
-  db: SQLite.SQLiteDatabase,
-  userId: string,
-  hour: number,
-  minute: number,
-  notificationId: string
-): Promise<void> {
+export async function enableMorningBriefing(db: SQLite.SQLiteDatabase, userId: string, hour: number, minute: number, notificationId: string): Promise<void> {
   const now = Date.now();
   await db.runAsync(
     `INSERT INTO prof_state (user_id, morning_briefing_hour, morning_briefing_minute, morning_briefing_enabled, morning_briefing_notification_id, updated_at)
@@ -438,12 +473,63 @@ export async function enableMorningBriefing(
   );
 }
 
-/**
- * 🆕 Désactive le briefing du matin.
- */
 export async function disableMorningBriefing(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   await db.runAsync(
     `UPDATE prof_state SET morning_briefing_enabled = 0, morning_briefing_notification_id = NULL, updated_at = ? WHERE user_id = ?`,
+    [Date.now(), userId]
+  );
+}
+
+// ============================================================
+// 🆕 RAPPEL DU SOIR
+// ============================================================
+
+export async function markEveningBriefingSent(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO prof_state (user_id, last_evening_briefing_at, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET last_evening_briefing_at = excluded.last_evening_briefing_at, updated_at = excluded.updated_at`,
+    [userId, now, now]
+  );
+}
+
+export async function wasEveningBriefingSentToday(db: SQLite.SQLiteDatabase, userId: string): Promise<boolean> {
+  const state = await getProfState(db, userId);
+  if (!state.last_evening_briefing_at) return false;
+  const lastDate = new Date(state.last_evening_briefing_at);
+  const today = new Date();
+  return (
+    lastDate.getDate() === today.getDate() &&
+    lastDate.getMonth() === today.getMonth() &&
+    lastDate.getFullYear() === today.getFullYear()
+  );
+}
+
+export async function enableEveningBriefing(db: SQLite.SQLiteDatabase, userId: string, hour: number, minute: number, notificationId: string): Promise<void> {
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO prof_state (user_id, evening_briefing_hour, evening_briefing_minute, evening_briefing_enabled, evening_briefing_notification_id, updated_at)
+     VALUES (?, ?, ?, 1, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET
+       evening_briefing_hour = excluded.evening_briefing_hour,
+       evening_briefing_minute = excluded.evening_briefing_minute,
+       evening_briefing_enabled = 1,
+       evening_briefing_notification_id = excluded.evening_briefing_notification_id,
+       updated_at = excluded.updated_at`,
+    [userId, hour, minute, notificationId, now]
+  );
+}
+
+export async function updateEveningBriefingTime(db: SQLite.SQLiteDatabase, userId: string, hour: number, minute: number): Promise<void> {
+  await db.runAsync(
+    `UPDATE prof_state SET evening_briefing_hour = ?, evening_briefing_minute = ?, updated_at = ? WHERE user_id = ?`,
+    [hour, minute, Date.now(), userId]
+  );
+}
+
+export async function disableEveningBriefing(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
+  await db.runAsync(
+    `UPDATE prof_state SET evening_briefing_enabled = 0, evening_briefing_notification_id = NULL, updated_at = ? WHERE user_id = ?`,
     [Date.now(), userId]
   );
 }
