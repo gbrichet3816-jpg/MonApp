@@ -98,6 +98,16 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_prof_topics_user
       ON prof_topics(user_id, next_review_at);
   `);
+
+  // 6. 🆕 État général de l'agent Prof (pour les propositions spontanées)
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS prof_state (
+      user_id TEXT PRIMARY KEY,
+      last_review_offer_at INTEGER,
+      last_morning_briefing_at INTEGER,
+      updated_at INTEGER NOT NULL
+    );
+  `);
 }
 
 // ============================================================
@@ -377,7 +387,6 @@ export interface ProfTopic {
 
 /**
  * Intervalles des révisions espacées (en jours).
- * Stage 0 → J+1, Stage 1 → J+3, Stage 2 → J+7, Stage 3 → J+21, Stage 4 → J+60
  */
 const REVIEW_INTERVALS_DAYS = [1, 3, 7, 21, 60];
 
@@ -408,7 +417,6 @@ export async function saveTopicProgress(
   );
 
   if (existing && existing.id !== undefined) {
-    // Mise à jour
     let newStage = existing.review_stage;
     let newStatus: ProfTopic['status'] = existing.status;
 
@@ -441,7 +449,6 @@ export async function saveTopicProgress(
       ]
     );
   } else {
-    // Nouvelle notion
     const stage = result === 'success' ? 1 : 0;
     const status: ProfTopic['status'] = result === 'success' ? 'in_progress' : 'fragile';
     const nextReview = computeNextReviewAt(stage);
@@ -507,4 +514,79 @@ export async function deleteTopic(
   topicId: number
 ): Promise<void> {
   await db.runAsync('DELETE FROM prof_topics WHERE id = ?', [topicId]);
+}
+
+// ============================================================
+// 🆕 ÉTAT GÉNÉRAL (pour les propositions spontanées)
+// ============================================================
+
+export interface ProfState {
+  user_id: string;
+  last_review_offer_at: number | null;
+  last_morning_briefing_at: number | null;
+  updated_at: number;
+}
+
+/**
+ * Récupère l'état de l'agent Prof pour un utilisateur.
+ * Crée une ligne vide si elle n'existe pas.
+ */
+export async function getProfState(
+  db: SQLite.SQLiteDatabase,
+  userId: string
+): Promise<ProfState> {
+  let state = await db.getFirstAsync<ProfState>(
+    'SELECT * FROM prof_state WHERE user_id = ?',
+    [userId]
+  );
+
+  if (!state) {
+    const now = Date.now();
+    await db.runAsync(
+      `INSERT INTO prof_state
+       (user_id, last_review_offer_at, last_morning_briefing_at, updated_at)
+       VALUES (?, NULL, NULL, ?)`,
+      [userId, now]
+    );
+    state = {
+      user_id: userId,
+      last_review_offer_at: null,
+      last_morning_briefing_at: null,
+      updated_at: now,
+    };
+  }
+
+  return state;
+}
+
+/**
+ * Met à jour le timestamp de la dernière proposition de révision.
+ */
+export async function markReviewOffered(
+  db: SQLite.SQLiteDatabase,
+  userId: string
+): Promise<void> {
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO prof_state (user_id, last_review_offer_at, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET
+       last_review_offer_at = excluded.last_review_offer_at,
+       updated_at = excluded.updated_at`,
+    [userId, now, now]
+  );
+}
+
+/**
+ * Vérifie si on peut proposer une révision aujourd'hui
+ * (pas déjà proposé dans les dernières 20 heures).
+ */
+export async function canOfferReviewToday(
+  db: SQLite.SQLiteDatabase,
+  userId: string
+): Promise<boolean> {
+  const state = await getProfState(db, userId);
+  if (!state.last_review_offer_at) return true;
+  const twentyHoursAgo = Date.now() - 20 * 60 * 60 * 1000;
+  return state.last_review_offer_at < twentyHoursAgo;
 }

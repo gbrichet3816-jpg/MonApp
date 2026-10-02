@@ -66,3 +66,37 @@ Le bilan doit être bref et proposer de commencer les apprentissages.`;
 
   return lines.join('\n');
 }
+
+/**
+ * 🆕 Formate les notions À REVOIR pour injection dans le prompt.
+ * Utilisé quand Prof doit proposer spontanément une révision.
+ */
+export function formatTopicsToReview(topics: ProfTopic[]): string {
+  if (topics.length === 0) return '';
+
+  const lines: string[] = [
+    '## NOTIONS À REVOIR AUJOURD\'HUI',
+    '',
+    'Ces notions doivent être proposées spontanément à l\'enfant (révisions espacées) :',
+    '',
+  ];
+
+  for (const t of topics) {
+    const daysSince = Math.floor((Date.now() - t.last_seen) / (24 * 60 * 60 * 1000));
+    const statusLabel =
+      t.status === 'fragile' ? '⚠️ fragile' :
+      t.status === 'in_progress' ? '🔄 en cours' :
+      '✅ acquis';
+
+    lines.push(
+      `- ${t.subject} : ${t.topic} (${statusLabel}, vue il y a ${daysSince} jours)`
+    );
+  }
+
+  lines.push('');
+  lines.push(
+    '💡 Propose à l\'enfant de réviser la première notion de la liste, en commençant par quelque chose de simple et court.'
+  );
+
+  return lines.join('\n');
+}

@@ -3,8 +3,19 @@ import { Alert, KeyboardAvoidingView, Platform, StyleSheet } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AGENTS } from '@/agents';
-import { getAllTopics, openProfDatabase, saveTopicProgress } from '@/agents/prof/database';
-import { formatTopicsForPrompt, isBilanRequest } from '@/agents/prof/helpers';
+import {
+  canOfferReviewToday,
+  getAllTopics,
+  getTopicsToReview,
+  markReviewOffered,
+  openProfDatabase,
+  saveTopicProgress,
+} from '@/agents/prof/database';
+import {
+  formatTopicsForPrompt,
+  formatTopicsToReview,
+  isBilanRequest,
+} from '@/agents/prof/helpers';
 import {
   scheduleMultipleDailyReminders,
   scheduleMultipleOneTimeReminders,
@@ -101,10 +112,83 @@ export default function HomeScreen() {
 
         return () => clearTimeout(timer);
       }
+
+      // 🆕 Détection des révisions espacées pour l'Agent Prof
+      if (selectedAgentId === 'prof') {
+        const timer = setTimeout(() => {
+          if (isMounted.current) {
+            checkReviewProposal();
+          }
+        }, 800);
+
+        return () => clearTimeout(timer);
+      }
     } else {
       setMessages([]);
     }
   }, [selectedAgentId]);
+
+  /**
+   * 🆕 Vérifie s'il y a des notions à revoir et propose spontanément une révision.
+   */
+  const checkReviewProposal = async () => {
+    try {
+      const profile = getLocalProfile();
+      if (!profile) return;
+      const userId = profile.code ?? 'default';
+
+      const db = await openProfDatabase();
+
+      // Vérifier qu'on n'a pas déjà proposé aujourd'hui
+      const canOffer = await canOfferReviewToday(db, userId);
+      if (!canOffer) return;
+
+      // Récupérer les notions à revoir
+      const topics = await getTopicsToReview(db, userId);
+      if (topics.length === 0) return;
+
+      // Marquer comme proposé AVANT l'appel pour éviter les doublons
+      await markReviewOffered(db, userId);
+
+      // Construire le prompt enrichi
+      const topicsText = formatTopicsToReview(topics);
+      const enrichedPrompt = `${PROF_SYSTEM_PROMPT_GENERIC_FOR_REVIEW}\n\n${topicsText}`;
+
+      // Appeler Prof pour qu'il formule le message
+      const apiMessages: ApiMessage[] = [
+        {
+          role: 'user',
+          content: '[SYSTEME] Tu viens de recevoir des notions à revoir. Propose spontanément une révision à l\'enfant (message court).',
+        },
+      ];
+
+      const result = await sendMessageToAgent({
+        messages: apiMessages,
+        agentSystemPrompt: enrichedPrompt,
+        enableTools: false,
+        agentId: 'prof',
+      });
+
+      if (!isMounted.current) return;
+      if (!result.reply) return;
+
+      const proposedMessage: ChatMessage = {
+        id: `agent-review-${Date.now()}`,
+        text: result.reply,
+        isUser: false,
+      };
+
+      setMessages((prev) => [...prev, proposedMessage]);
+      saveMessage({
+        id: proposedMessage.id,
+        agentId: 'prof',
+        text: proposedMessage.text,
+        isUser: false,
+      });
+    } catch (e) {
+      console.warn('[Prof] Erreur proposition de révision:', e);
+    }
+  };
 
   const checkPendingReminders = () => {
     if (!isMounted.current) return;
@@ -157,7 +241,6 @@ export default function HomeScreen() {
           content: args.content,
         });
       } else if (call.name === 'saveTopicProgress') {
-        // 🆕 Enregistrement d'une notion travaillée (Agent Prof)
         try {
           const profDb = await openProfDatabase();
           const profile = getLocalProfile();
@@ -361,7 +444,6 @@ export default function HomeScreen() {
     setIsLoading(true);
 
     try {
-      // Injection "bilan" pour l'Agent Prof
       let systemPrompt = selectedAgent.systemPrompt;
       if (selectedAgent.id === 'prof' && isBilanRequest(text)) {
         try {
@@ -809,6 +891,13 @@ export default function HomeScreen() {
     </SafeAreaView>
   );
 }
+
+// ⚠️ Cette constante est définie ici pour éviter les imports circulaires.
+// Elle sera remplacée par le vrai prompt côté serveur.
+const PROF_SYSTEM_PROMPT_GENERIC_FOR_REVIEW = `Tu es "Prof". Tu viens de recevoir des notions à revoir.
+Propose spontanément une révision à l'enfant avec un message COURT (2-3 lignes max).
+Ton chaleureux, léger, avec une porte de sortie ("tu veux ?").
+Format : "Salut ! 👋 Ça fait X jours qu'on n'a pas revu [notion]. Tu veux un petit exercice ? Ça prendra 3 minutes."`;
 
 const styles = StyleSheet.create({
   safeArea: {
