@@ -11,9 +11,6 @@ import {
 // BILAN
 // ============================================================
 
-/**
- * Détecte si un message contient un mot-clé "bilan".
- */
 export function isBilanRequest(text: string): boolean {
   const lower = text.toLowerCase();
   const keywords = [
@@ -33,8 +30,150 @@ export function isBilanRequest(text: string): boolean {
 }
 
 /**
- * Formate les données de progression pour injection dans le prompt.
+ * Détecte si un message demande un bilan des NOTES.
  */
+export function isGradesRequest(text: string): boolean {
+  const lower = text.toLowerCase();
+  const keywords = [
+    'mes notes',
+    'les notes',
+    'bilan des notes',
+    'bilan notes',
+    'moyenne',
+    'moyennes',
+    'résultats scolaires',
+    'resultats scolaires',
+    'mes résultats',
+    'mes resultats',
+    'bulletin',
+    'mes contrôles',
+    'mes controles',
+    'mes évaluations',
+    'mes evaluations',
+  ];
+  return keywords.some((k) => lower.includes(k));
+}
+
+/**
+ * Détecte si un message contient une note.
+ * Retourne { grade, gradeMax } si trouvé, null sinon.
+ */
+export function extractGradeFromMessage(
+  text: string
+): { grade: number; gradeMax: number } | null {
+  // Pattern "X/Y" ou "X / Y"
+  const slashPattern = /(\d+(?:[.,]\d+)?)\s*\/\s*(\d+(?:[.,]\d+)?)/;
+  const slashMatch = text.match(slashPattern);
+  if (slashMatch) {
+    const grade = parseFloat(slashMatch[1].replace(',', '.'));
+    const gradeMax = parseFloat(slashMatch[2].replace(',', '.'));
+    if (!isNaN(grade) && !isNaN(gradeMax) && gradeMax > 0) {
+      return { grade, gradeMax };
+    }
+  }
+
+  // Pattern "X sur Y"
+  const surPattern = /(\d+(?:[.,]\d+)?)\s+sur\s+(\d+(?:[.,]\d+)?)/i;
+  const surMatch = text.match(surPattern);
+  if (surMatch) {
+    const grade = parseFloat(surMatch[1].replace(',', '.'));
+    const gradeMax = parseFloat(surMatch[2].replace(',', '.'));
+    if (!isNaN(grade) && !isNaN(gradeMax) && gradeMax > 0) {
+      return { grade, gradeMax };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extrait une matière probable dans un message de note.
+ */
+export function extractSubjectFromGradeMessage(text: string): string | null {
+  const lower = text.toLowerCase();
+  const subjects = [
+    { key: 'mathématiques', label: 'Maths' },
+    { key: 'mathematiques', label: 'Maths' },
+    { key: 'maths', label: 'Maths' },
+    { key: 'math', label: 'Maths' },
+    { key: 'français', label: 'Français' },
+    { key: 'francais', label: 'Français' },
+    { key: 'histoire', label: 'Histoire' },
+    { key: 'géographie', label: 'Géographie' },
+    { key: 'geographie', label: 'Géographie' },
+    { key: 'anglais', label: 'Anglais' },
+    { key: 'espagnol', label: 'Espagnol' },
+    { key: 'allemand', label: 'Allemand' },
+    { key: 'sciences', label: 'Sciences' },
+    { key: 'svt', label: 'SVT' },
+    { key: 'physique', label: 'Physique' },
+    { key: 'chimie', label: 'Chimie' },
+    { key: 'musique', label: 'Musique' },
+    { key: 'arts', label: 'Arts' },
+    { key: 'sport', label: 'Sport' },
+    { key: 'eps', label: 'Sport' },
+  ];
+
+  for (const s of subjects) {
+    if (lower.includes(s.key)) {
+      return s.label;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Formate les contrôles en attente de note pour injection dans le prompt.
+ */
+export function formatPendingGradesContext(
+  events: ProfEvent[],
+  detectedGrade?: { grade: number; gradeMax: number } | null
+): string {
+  if (events.length === 0 && !detectedGrade) return '';
+
+  const lines: string[] = ['## CONTRÔLES EN ATTENTE DE NOTE', ''];
+
+  if (detectedGrade) {
+    lines.push(`L'enfant vient de donner une note : **${detectedGrade.grade}/${detectedGrade.gradeMax}**`);
+    lines.push('');
+  }
+
+  if (events.length > 0) {
+    lines.push('Ces contrôles sont passés récemment et n\'ont pas encore de note :');
+    for (const ev of events) {
+      const daysAgo = Math.floor((Date.now() - ev.due_date) / (24 * 60 * 60 * 1000));
+      lines.push(`- [ID: ${ev.id}] ${ev.subject} : ${ev.title} (il y a ${daysAgo} jours)`);
+    }
+    lines.push('');
+  }
+
+  if (detectedGrade) {
+    lines.push('👉 Tu DOIS appeler le tool `saveGrade` avec :');
+    if (events.length === 1) {
+      lines.push(`   - eventId: ${events[0].id}`);
+      lines.push(`   - subject: "${events[0].subject}"`);
+      lines.push(`   - title: "${events[0].title}"`);
+    } else {
+      lines.push('   - eventId: 0');
+      lines.push('   - subject: la matière détectée dans le message');
+      lines.push('   - title: "Contrôle"');
+    }
+    lines.push(`   - grade: ${detectedGrade.grade}`);
+    lines.push(`   - grade_max: ${detectedGrade.gradeMax}`);
+    lines.push('');
+    lines.push('Puis félicite l\'enfant (si bonne note) ou encourage-le (si moins bonne).');
+  } else {
+    lines.push('👉 Si l\'enfant te donne une note, tu appelles `saveGrade`.');
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================
+// PROGRESSION
+// ============================================================
+
 export function formatTopicsForPrompt(topics: ProfTopic[]): string {
   if (topics.length === 0) {
     return `## DONNÉES DE PROGRESSION
@@ -79,9 +218,6 @@ Le bilan doit être bref et proposer de commencer les apprentissages.`;
 // RÉVISIONS ESPACÉES
 // ============================================================
 
-/**
- * Formate les notions À REVOIR pour injection dans le prompt.
- */
 export function formatTopicsToReview(topics: ProfTopic[]): string {
   if (topics.length === 0) return '';
 
@@ -106,7 +242,7 @@ export function formatTopicsToReview(topics: ProfTopic[]): string {
 
   lines.push('');
   lines.push(
-    '💡 Propose à l\'enfant de réviser la première notion de la liste, en commençant par quelque chose de simple et court.'
+    '💡 Propose à l\'enfant de réviser la première notion de la liste.'
   );
 
   return lines.join('\n');
@@ -116,9 +252,6 @@ export function formatTopicsToReview(topics: ProfTopic[]): string {
 // EMPLOI DU TEMPS
 // ============================================================
 
-/**
- * Formate l'emploi du temps pour injection dans le prompt.
- */
 export function formatScheduleForPrompt(items: ProfScheduleItem[]): string {
   if (items.length === 0) {
     return `## EMPLOI DU TEMPS
@@ -159,13 +292,11 @@ Demande gentiment à l'enfant de t'envoyer une photo de son emploi du temps.`;
 // RAPPEL DU SOIR
 // ============================================================
 
-/**
- * Formate les données pour le briefing du soir.
- */
 export function formatEveningBriefingData(
   tomorrowEvents: ProfEvent[],
   tomorrowSchedule: ProfScheduleItem[],
-  fragileTopics: ProfTopic[]
+  fragileTopics: ProfTopic[],
+  pendingGrades: ProfEvent[] = []
 ): string {
   const lines: string[] = ['## DONNÉES DU RAPPEL DU SOIR', ''];
   lines.push('Voici ce que tu dois vérifier avec l\'enfant ce soir :');
@@ -200,28 +331,34 @@ export function formatEveningBriefingData(
     lines.push('');
   }
 
+  if (pendingGrades.length > 0) {
+    lines.push('### 📝 Contrôles passés en attente de note :');
+    for (const ev of pendingGrades) {
+      const daysAgo = Math.floor((Date.now() - ev.due_date) / (24 * 60 * 60 * 1000));
+      lines.push(`- [ID: ${ev.id}] ${ev.subject} : ${ev.title} (il y a ${daysAgo} jours)`);
+    }
+    lines.push('');
+    lines.push('👉 Glisse une question COURTE dans ton message du soir pour demander la note.');
+    lines.push('   Ex: "Au fait, tu as eu ta note de Maths ? Tu peux me la dire !"');
+    lines.push('');
+  }
+
   lines.push('## TON MESSAGE');
   lines.push('');
-  lines.push('Tu composes UN message court (3-4 lignes max), chaleureux et utile,');
-  lines.push('qui combine ces informations. Par exemple :');
-  lines.push('- Si contrôle demain : "Demain tu as un contrôle de Maths, tu veux qu\'on révise ?"');
-  lines.push('- Si Sport demain : "Pense à préparer tes affaires de sport pour demain 🎒"');
-  lines.push('- Si notion fragile : "On n\'a pas revu les fractions, tu veux 5 minutes ?"');
-  lines.push('');
-  lines.push('Tu ne listes PAS tout. Tu choisis le point le PLUS important.');
-  lines.push('Si rien de spécial → tu ne dis rien.');
+  lines.push('Tu composes UN message court (3-5 lignes max), chaleureux et utile,');
+  lines.push('qui combine ces informations. Tu ne listes PAS tout.');
+  lines.push('Tu choisis les informations les PLUS importantes :');
+  lines.push('- Si contrôle demain → priorité');
+  lines.push('- Si note en attente → demande-la gentiment');
+  lines.push('- Sinon → cours du lendemain');
 
   return lines.join('\n');
 }
 
 // ============================================================
-// 🆕 MÉTÉO
+// MÉTÉO
 // ============================================================
 
-/**
- * Formate les données météo pour le briefing du matin.
- * Différent du format à la demande : ici on combine avec l'EDT.
- */
 export function formatWeatherForMorningBriefing(
   city: string,
   current: { temp: number; description: string },
@@ -246,8 +383,93 @@ export function formatWeatherForMorningBriefing(
     '- Mentionne la température actuelle',
     '- Signale s\'il va pleuvoir ou s\'il fait froid',
     '- Donne le conseil (pull, parapluie, etc.)',
-    '- Ne fais PAS de liste à puces, écris des phrases fluides',
   ];
+
+  return lines.join('\n');
+}
+
+// ============================================================
+// NOTES SCOLAIRES
+// ============================================================
+
+export function formatGradesForPrompt(events: ProfEvent[]): string {
+  const eventsWithGrades = events.filter(
+    (e) => e.grade !== null && e.grade !== undefined && e.grade_max
+  );
+
+  if (eventsWithGrades.length === 0) {
+    return `## NOTES SCOLAIRES
+
+Aucune note n'a encore été enregistrée pour cet enfant.
+Le bilan doit être bref et proposer de commencer à enregistrer les notes.`;
+  }
+
+  const bySubject: Record<string, ProfEvent[]> = {};
+  for (const e of eventsWithGrades) {
+    const subject = e.subject || 'Autre';
+    if (!bySubject[subject]) bySubject[subject] = [];
+    bySubject[subject].push(e);
+  }
+
+  const lines: string[] = ['## NOTES SCOLAIRES', ''];
+  lines.push(`Total : ${eventsWithGrades.length} note(s) enregistrée(s)`);
+  lines.push('');
+
+  for (const [subject, list] of Object.entries(bySubject)) {
+    let totalPoints = 0;
+    let totalMax = 0;
+    for (const e of list) {
+      if (e.grade !== null && e.grade_max) {
+        totalPoints += e.grade;
+        totalMax += e.grade_max;
+      }
+    }
+    const moyenne = totalMax > 0 ? (totalPoints / totalMax) * 20 : 0;
+
+    lines.push(`${subject} (${list.length} note${list.length > 1 ? 's' : ''}, moyenne ${moyenne.toFixed(1)}/20) :`);
+
+    for (const e of list) {
+      const gradeStr = `${e.grade}/${e.grade_max}`;
+      const dateStr = e.grade_at
+        ? new Date(e.grade_at).toLocaleDateString('fr-FR')
+        : 'date inconnue';
+      lines.push(`- ${gradeStr} (${e.title}, ${dateStr})`);
+    }
+    lines.push('');
+  }
+
+  lines.push('## CONSIGNES POUR LE BILAN');
+  lines.push('');
+  lines.push('- Félicite les bonnes notes');
+  lines.push('- Liste les notes par matière avec leur moyenne');
+  lines.push('- Encourage sur les matières fragiles (sans juger)');
+  lines.push('- Propose de travailler les points faibles');
+  lines.push('- Ne juge JAMAIS');
+  lines.push('- Termine par un encouragement');
+
+  return lines.join('\n');
+}
+
+export function formatPendingGradesForPrompt(events: ProfEvent[]): string {
+  if (events.length === 0) return '';
+
+  const lines: string[] = [
+    '## CONTRÔLES EN ATTENTE DE NOTE',
+    '',
+    'Ces contrôles ont eu lieu il y a 2-3 jours et l\'enfant n\'a pas encore donné sa note.',
+    'Glisse une question COURTE dans ton message du soir :',
+    '',
+  ];
+
+  for (const ev of events) {
+    const daysAgo = Math.floor((Date.now() - ev.due_date) / (24 * 60 * 60 * 1000));
+    lines.push(`- [ID: ${ev.id}] Contrôle de ${ev.subject} : ${ev.title} (il y a ${daysAgo} jours)`);
+  }
+
+  lines.push('');
+  lines.push('Exemple : "Au fait, tu as eu ta note de Maths ? Tu peux me la dire !"');
+  lines.push('');
+  lines.push('👉 Quand l\'enfant te donne la note, tu appelles le tool \`saveGrade\`.');
 
   return lines.join('\n');
 }

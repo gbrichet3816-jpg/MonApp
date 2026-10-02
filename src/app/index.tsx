@@ -9,17 +9,21 @@ import {
   canOfferReviewToday,
   clearSchedule,
   getAllTopics,
+  getEventsAwaitingGrade,
   getEventsForDate,
+  getEventsWithGrades,
   getFragileTopics,
   getProfProfile,
   getProfState,
   getSchedule,
   getTopicsToReview,
   markEveningBriefingSent,
+  markGradeAsked,
   markMorningBriefingSent,
   markReviewOffered,
   markWeatherRefusalPrompted,
   openProfDatabase,
+  saveEventGrade,
   saveTopicProgress,
   setWeatherCity,
   updateEveningBriefingTime,
@@ -27,11 +31,16 @@ import {
   wasMorningBriefingSentToday,
 } from '@/agents/prof/database';
 import {
+  extractGradeFromMessage,
+  extractSubjectFromGradeMessage,
   formatEveningBriefingData,
+  formatGradesForPrompt,
+  formatPendingGradesContext,
   formatScheduleForPrompt,
   formatTopicsForPrompt,
   formatTopicsToReview,
-  isBilanRequest
+  isBilanRequest,
+  isGradesRequest,
 } from '@/agents/prof/helpers';
 import {
   cancelEveningBriefing,
@@ -48,7 +57,7 @@ import {
   fetchWeather,
   formatWeatherForPrompt,
   isWeatherQuestion,
-} from '@/agents/prof/weather temp';
+} from '@/agents/prof/weather';
 import {
   scheduleMultipleDailyReminders,
   scheduleMultipleOneTimeReminders,
@@ -63,7 +72,13 @@ import AgentMenu from '@/components/common/AgentMenu';
 import Header from '@/components/common/Header';
 import Onboarding from '@/components/common/Onboarding';
 import SettingsModal from '@/components/common/SettingsModal';
-import { ApiMessage, extractPdfText, sendMessageToAgent, ToolCall } from '@/config/api';
+import {
+  ApiMessage,
+  extractPdfText,
+  sendMessageToAgent,
+  sendToolResultToAgent,
+  ToolCall,
+} from '@/config/api';
 import {
   deactivateAllReminders,
   deactivateRemindersByName,
@@ -173,9 +188,6 @@ export default function HomeScreen() {
   // VÉRIFICATIONS AUTOMATIQUES
   // ============================================================
 
-  /**
-   * 🆕 Redemande la ville si l'utilisateur ne l'a pas donnée (max 3 fois).
-   */
   const checkWeatherCityPrompt = async () => {
     try {
       const profile = getLocalProfile();
@@ -185,7 +197,6 @@ export default function HomeScreen() {
       const should = await shouldAskWeatherCity(db, userId);
       if (!should) return;
 
-      // Message de Prof pour redemander la ville
       const askMessage: ChatMessage = {
         id: `agent-weather-ask-${Date.now()}`,
         text: `Au fait, tu ne m'as pas encore dit dans quelle ville tu habites 🙂\nComme ça je pourrai te donner la météo du matin !`,
@@ -226,12 +237,9 @@ export default function HomeScreen() {
         return;
       }
 
-      const coursesText = schedule
-        .map((item) => `${item.subject} à ${item.start_time}`)
-        .join(', ');
+      const coursesText = schedule.map((item) => `${item.subject} à ${item.start_time}`).join(', ');
       const childName = profile?.firstName ?? 'toi';
 
-      // 🆕 Récupérer la météo si activée et ville disponible
       const fullProfile = await getProfProfile(db, userId);
       let weatherText = '';
 
@@ -286,18 +294,29 @@ export default function HomeScreen() {
       const tomorrowEvents = await getEventsForDate(db, userId, tomorrow);
       const tomorrowSchedule = await getSchedule(db, userId, dayOfWeek);
       const fragileTopics = await getFragileTopics(db, userId);
+      const pendingGrades = await getEventsAwaitingGrade(db, userId);
 
-      if (tomorrowEvents.length === 0 && fragileTopics.length === 0 && tomorrowSchedule.length === 0) {
+      if (
+        tomorrowEvents.length === 0 &&
+        fragileTopics.length === 0 &&
+        tomorrowSchedule.length === 0 &&
+        pendingGrades.length === 0
+      ) {
         await markEveningBriefingSent(db, userId);
         return;
       }
 
-      const eveningData = formatEveningBriefingData(tomorrowEvents, tomorrowSchedule, fragileTopics);
+      const eveningData = formatEveningBriefingData(
+        tomorrowEvents,
+        tomorrowSchedule,
+        fragileTopics,
+        pendingGrades
+      );
       const enrichedPrompt = `${EVENING_BRIEFING_PROMPT}\n\n${eveningData}`;
 
       const apiMessages: ApiMessage[] = [{
         role: 'user',
-        content: '[SYSTEME] Tu viens de recevoir les données du rappel du soir. Compose UN message court (3-4 lignes max) pour l\'enfant.',
+        content: '[SYSTEME] Tu viens de recevoir les données du rappel du soir. Compose UN message court (3-5 lignes max) pour l\'enfant.',
       }];
 
       const result = await sendMessageToAgent({
@@ -320,6 +339,13 @@ export default function HomeScreen() {
       };
       setMessages((prev) => [...prev, eveningMessage]);
       saveMessage({ id: eveningMessage.id, agentId: 'prof', text: eveningMessage.text, isUser: false });
+
+      for (const ev of pendingGrades) {
+        if (ev.id !== undefined) {
+          await markGradeAsked(db, ev.id);
+        }
+      }
+
       await markEveningBriefingSent(db, userId);
     } catch (e) {
       console.warn('[Prof] Erreur checkEveningBriefing:', e);
@@ -387,8 +413,78 @@ export default function HomeScreen() {
   };
 
   // ============================================================
-  // GESTION DES TOOL CALLS
+  // EXECUTION DES TOOLS + HANDLERS
   // ============================================================
+
+  const executeToolCall = async (call: ToolCall, agentId: string): Promise<string> => {
+    const args = call.arguments as any;
+    console.log('🔧 Exécution du tool:', call.name, args);
+
+    try {
+      if (call.name === 'listGrades') {
+        const profDb = await openProfDatabase();
+        const profile = getLocalProfile();
+        const userId = profile?.code ?? 'default';
+        const events = await getEventsWithGrades(profDb, userId);
+
+        if (events.length === 0) {
+          return 'Aucune note enregistrée pour cet enfant pour le moment.';
+        }
+
+        const lines: string[] = ['Notes enregistrées :', ''];
+        const bySubject: Record<string, any[]> = {};
+        for (const e of events) {
+          const subject = e.subject || 'Autre';
+          if (!bySubject[subject]) bySubject[subject] = [];
+          bySubject[subject].push(e);
+        }
+
+        for (const [subject, list] of Object.entries(bySubject)) {
+          let totalPoints = 0;
+          let totalMax = 0;
+          for (const e of list) {
+            if (e.grade !== null && e.grade_max) {
+              totalPoints += e.grade;
+              totalMax += e.grade_max;
+            }
+          }
+          const moyenne = totalMax > 0 ? (totalPoints / totalMax) * 20 : 0;
+          lines.push(`${subject} (${list.length} note${list.length > 1 ? 's' : ''}, moyenne ${moyenne.toFixed(1)}/20) :`);
+          for (const e of list) {
+            lines.push(`  - ${e.grade}/${e.grade_max} (${e.title})`);
+          }
+        }
+        return lines.join('\n');
+      }
+
+      if (call.name === 'getSchedule') {
+        const profDb = await openProfDatabase();
+        const profile = getLocalProfile();
+        const userId = profile?.code ?? 'default';
+        const schedule = await getSchedule(profDb, userId);
+        if (schedule.length === 0) return 'Aucun emploi du temps enregistré.';
+        const dayNames = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+        const lines: string[] = ['Emploi du temps :', ''];
+        const byDay: Record<number, any[]> = {};
+        for (const item of schedule) {
+          if (!byDay[item.day_of_week]) byDay[item.day_of_week] = [];
+          byDay[item.day_of_week].push(item);
+        }
+        for (const [day, items] of Object.entries(byDay)) {
+          lines.push(`${dayNames[parseInt(day)]} :`);
+          for (const item of items) {
+            lines.push(`  - ${item.start_time}-${item.end_time} : ${item.subject}`);
+          }
+        }
+        return lines.join('\n');
+      }
+
+      return 'Tool non reconnu : ' + call.name;
+    } catch (e) {
+      console.warn('[Prof] Erreur execution tool:', e);
+      return 'Erreur lors de l\'exécution du tool.';
+    }
+  };
 
   const handleToolCalls = async (toolCalls: ToolCall[], agentId: string): Promise<ChatMessage[]> => {
     const resultMessages: ChatMessage[] = [];
@@ -474,7 +570,6 @@ export default function HomeScreen() {
           }
         } catch (e) { console.warn('[Prof] toggleEveningBriefing:', e); }
       } else if (call.name === 'updateWeatherCity') {
-        // 🆕 Changement de ville
         try {
           const profDb = await openProfDatabase();
           const profile = getLocalProfile();
@@ -484,6 +579,37 @@ export default function HomeScreen() {
             await setWeatherCity(profDb, userId, city);
           }
         } catch (e) { console.warn('[Prof] updateWeatherCity:', e); }
+      } else if (call.name === 'saveGrade') {
+        try {
+          const profDb = await openProfDatabase();
+          const profile = getLocalProfile();
+          const userId = profile?.code ?? 'default';
+          const grade = parseFloat(args.grade);
+          const gradeMax = parseFloat(args.grade_max);
+
+          if (!isNaN(grade) && !isNaN(gradeMax)) {
+            const eventId = parseInt(args.eventId);
+            if (!isNaN(eventId) && eventId > 0) {
+              await saveEventGrade(profDb, eventId, grade, gradeMax);
+            } else {
+              await addProfEvent(profDb, {
+                user_id: userId,
+                type: 'controle',
+                subject: args.subject || 'Matière inconnue',
+                title: args.title || 'Contrôle',
+                due_date: Date.now() - 3 * 24 * 60 * 60 * 1000,
+                done: 1,
+              });
+              const allEvents = await getEventsWithGrades(profDb, userId);
+              const lastEvent = allEvents[0];
+              if (lastEvent && lastEvent.id !== undefined) {
+                await saveEventGrade(profDb, lastEvent.id, grade, gradeMax);
+              }
+            }
+          }
+        } catch (e) { console.warn('[Prof] saveGrade:', e); }
+      } else if (call.name === 'listGrades') {
+        // Géré dans executeToolCall (boucle tool calling)
       } else if (call.name === 'createDailyReminders') {
         const medicationName = args.medicationName;
         const times: string[] = args.times || [];
@@ -568,6 +694,8 @@ export default function HomeScreen() {
   const headerTitle = selectedAgent ? selectedAgent.name : 'Aucun agent';
 
   const handleSend = async (text: string) => {
+    console.log('🚀 handleSend appelé avec:', text);
+
     if (!selectedAgent) return;
 
     const userMessage: ChatMessage = { id: `user-${Date.now()}`, text, isUser: true };
@@ -587,11 +715,11 @@ export default function HomeScreen() {
     }
 
     setIsLoading(true);
+    console.log('🟡 isLoading mis à true');
 
     try {
       let systemPrompt = selectedAgent.systemPrompt;
 
-      // Injection bilan
       if (selectedAgent.id === 'prof' && isBilanRequest(text)) {
         try {
           const profDb = await openProfDatabase();
@@ -603,7 +731,37 @@ export default function HomeScreen() {
         } catch (e) { console.warn('[Prof] bilan:', e); }
       }
 
-      // Injection emploi du temps
+      if (selectedAgent.id === 'prof' && isGradesRequest(text)) {
+        try {
+          const profDb = await openProfDatabase();
+          const profile = getLocalProfile();
+          const userId = profile?.code ?? 'default';
+          const eventsWithGrades = await getEventsWithGrades(profDb, userId);
+          const gradesText = formatGradesForPrompt(eventsWithGrades);
+          systemPrompt = `${systemPrompt}\n\n${gradesText}`;
+        } catch (e) { console.warn('[Prof] notes:', e); }
+      }
+
+      if (selectedAgent.id === 'prof') {
+        const detectedGrade = extractGradeFromMessage(text);
+        if (detectedGrade) {
+          try {
+            const profDb = await openProfDatabase();
+            const profile = getLocalProfile();
+            const userId = profile?.code ?? 'default';
+            const pendingGrades = await getEventsAwaitingGrade(profDb, userId);
+            const contextText = formatPendingGradesContext(pendingGrades, detectedGrade);
+
+            if (contextText) {
+              systemPrompt = `${systemPrompt}\n\n${contextText}`;
+            } else {
+              const subject = extractSubjectFromGradeMessage(text) || 'Matière inconnue';
+              systemPrompt = `${systemPrompt}\n\n## NOTE DONNÉE PAR L'ENFANT\n\nL'enfant vient de donner une note : **${detectedGrade.grade}/${detectedGrade.gradeMax}** en ${subject}.\n\n👉 Tu DOIS appeler le tool \`saveGrade\` avec :\n- eventId: 0\n- subject: "${subject}"\n- title: "Contrôle"\n- grade: ${detectedGrade.grade}\n- grade_max: ${detectedGrade.gradeMax}\n\nPuis félicite ou encourage.`;
+            }
+          } catch (e) { console.warn('[Prof] détection note:', e); }
+        }
+      }
+
       if (selectedAgent.id === 'prof' && isScheduleQuestion(text)) {
         try {
           const profDb = await openProfDatabase();
@@ -615,7 +773,6 @@ export default function HomeScreen() {
         } catch (e) { console.warn('[Prof] emploi du temps:', e); }
       }
 
-      // 🆕 Injection météo (à la demande)
       if (selectedAgent.id === 'prof' && isWeatherQuestion(text)) {
         try {
           const profDb = await openProfDatabase();
@@ -623,7 +780,6 @@ export default function HomeScreen() {
           const userId = profile?.code ?? 'default';
           const fullProfile = await getProfProfile(profDb, userId);
 
-          // Détecter une ville spécifique dans le message
           const specificCity = extractCityFromMessage(text);
           const cityToUse = specificCity || fullProfile?.weather_city;
 
@@ -639,7 +795,6 @@ export default function HomeScreen() {
         } catch (e) { console.warn('[Prof] météo:', e); }
       }
 
-      // 🆕 Détection changement de ville
       if (selectedAgent.id === 'prof') {
         const newCity = extractCityChangeFromMessage(text);
         if (newCity) {
@@ -658,6 +813,8 @@ export default function HomeScreen() {
         content: m.text,
       }));
 
+      console.log('📤 Envoi à Prof...');
+
       const result = await sendMessageToAgent({
         messages: apiMessages,
         agentSystemPrompt: systemPrompt,
@@ -665,20 +822,60 @@ export default function HomeScreen() {
         agentId: selectedAgent.id,
       });
 
+      console.log('📥 Réponse reçue:', result.reply?.substring(0, 50), '| ToolCalls:', result.toolCalls?.length);
+
       if (!isMounted.current) return;
 
-      if (result.toolCalls && result.toolCalls.length > 0) {
-        await handleToolCalls(result.toolCalls, selectedAgent.id);
-        const finalText = result.reply && result.reply.trim().length > 0 ? result.reply : null;
-        if (finalText) {
-          const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: finalText, isUser: false };
+      // 🆕 BOUCLE DE TOOL CALLING
+      let currentResult = result;
+      let loopCount = 0;
+      const MAX_LOOPS = 3;
+
+      while (
+        currentResult.toolCalls &&
+        currentResult.toolCalls.length > 0 &&
+        loopCount < MAX_LOOPS
+      ) {
+        loopCount++;
+        console.log(`🔁 Boucle tool calling #${loopCount}`);
+
+        const firstTool = currentResult.toolCalls[0];
+        const toolResult = await executeToolCall(firstTool, selectedAgent.id);
+
+        const newResult = await sendToolResultToAgent({
+          messages: apiMessages,
+          toolCall: firstTool,
+          toolResult: toolResult,
+          agentSystemPrompt: systemPrompt,
+          agentId: selectedAgent.id,
+        });
+
+        console.log(`📥 Réponse boucle #${loopCount}:`, newResult.reply?.substring(0, 50));
+
+        if (newResult.reply && newResult.reply.trim().length > 0) {
+          const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
           saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
+          currentResult = newResult;
+          break;
         }
-      } else {
+
+        currentResult = newResult;
+      }
+
+      // Si après la boucle il n'y a toujours pas de reply → message par défaut
+      if (!currentResult.reply || currentResult.reply.trim().length === 0) {
+        const fallbackMessage: ChatMessage = {
+          id: `agent-${Date.now()}`,
+          text: 'Je n\'ai pas réussi à formuler une réponse. Réessaie avec un autre message 😅',
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, fallbackMessage]);
+        saveMessage({ id: fallbackMessage.id, agentId: selectedAgent.id, text: fallbackMessage.text, isUser: false });
+      } else if (!currentResult.toolCalls || currentResult.toolCalls.length === 0) {
         const agentMessage: ChatMessage = {
           id: `agent-${Date.now()}`,
-          text: result.reply || '(pas de réponse)',
+          text: currentResult.reply,
           isUser: false,
         };
         setMessages((prev) => [...prev, agentMessage]);
@@ -693,6 +890,7 @@ export default function HomeScreen() {
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
+      console.log('🔴 finally atteint');
       if (isMounted.current) setIsLoading(false);
     }
   };
@@ -985,13 +1183,14 @@ export default function HomeScreen() {
 // ============================================================
 
 const EVENING_BRIEFING_PROMPT = `Tu es "Prof". Tu prépares ton rappel du soir pour l'enfant.
-Tu viens de recevoir des données sur la journée de demain.
-Compose UN SEUL message court (3-4 lignes max), chaleureux, utile.
-Tu choisis l'information la PLUS importante. Tu ne listes pas tout.
+Tu viens de recevoir des données sur la journée de demain et éventuellement
+des contrôles passés en attente de note.
+Compose UN SEUL message court (3-5 lignes max), chaleureux, utile.
+Tu choisis les informations les PLUS importantes. Tu ne listes pas tout.
 Exemples :
 - "Demain tu as un contrôle de Maths, tu veux qu'on révise 10 minutes ? 💪"
 - "Pense à préparer tes affaires de sport pour demain 🎒"
-- "Tu veux qu'on revoie les fractions rapidement avant demain ?"`;
+- "Au fait, tu as eu ta note de Maths ? Tu peux me la dire ! 📝"`;
 
 const PROF_REVIEW_PROMPT = `Tu es "Prof". Tu viens de recevoir des notions à revoir.
 Propose spontanément une révision à l'enfant avec un message COURT (2-3 lignes max).
