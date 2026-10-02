@@ -425,6 +425,14 @@ export default function HomeScreen() {
       const profile = getLocalProfile();
       const userId = profile?.code ?? 'default';
 
+      // 🆕 DICTÉE
+      if (call.name === 'startDictation') {
+        const sentence = args.sentence || '';
+        if (!sentence) return 'Aucune phrase fournie.';
+        // Retourner un marqueur spécial qui sera détecté par handleSend
+        return `__DICTATION__:${sentence}`;
+      }
+
       if (call.name === 'listGrades') {
         const events = await getEventsWithGrades(profDb, userId);
         if (events.length === 0) {
@@ -803,7 +811,7 @@ export default function HomeScreen() {
 
       if (!isMounted.current) return;
 
-      // 🆕 BOUCLE DE TOOL CALLING
+      // BOUCLE DE TOOL CALLING
       let currentResult = result;
       let loopCount = 0;
       let messageAlreadyDisplayed = false;
@@ -830,6 +838,29 @@ export default function HomeScreen() {
 
         console.log(`📥 Réponse boucle #${loopCount}:`, newResult.reply?.substring(0, 50));
 
+        // 🆕 Détection de dictée
+        if (toolResult.startsWith('__DICTATION__:')) {
+          const sentence = toolResult.replace('__DICTATION__:', '');
+          const dictationMessage: ChatMessage = {
+            id: `agent-dictation-${Date.now()}`,
+            text: sentence,
+            isUser: false,
+            isDictation: true,
+          };
+          setMessages((prev) => [...prev, dictationMessage]);
+          saveMessage({ id: dictationMessage.id, agentId: selectedAgent.id, text: dictationMessage.text, isUser: false });
+          messageAlreadyDisplayed = true;
+
+          // Si Prof a aussi écrit un texte, on l'affiche après
+          if (newResult.reply && newResult.reply.trim().length > 0) {
+            const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
+            setMessages((prev) => [...prev, finalMessage]);
+            saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
+          }
+          currentResult = newResult;
+          break;
+        }
+
         if (newResult.reply && newResult.reply.trim().length > 0) {
           const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
@@ -842,7 +873,6 @@ export default function HomeScreen() {
         currentResult = newResult;
       }
 
-      // 🆕 AFFICHER UNIQUEMENT SI ON N'A PAS DÉJÀ AFFICHÉ
       if (!messageAlreadyDisplayed) {
         if (!currentResult.reply || currentResult.reply.trim().length === 0) {
           const fallbackMessage: ChatMessage = {
@@ -985,6 +1015,28 @@ export default function HomeScreen() {
           agentSystemPrompt: selectedAgent.systemPrompt,
           agentId: selectedAgent.id,
         });
+
+        // 🆕 Détection de dictée
+        if (toolResult.startsWith('__DICTATION__:')) {
+          const sentence = toolResult.replace('__DICTATION__:', '');
+          const dictationMessage: ChatMessage = {
+            id: `agent-dictation-${Date.now()}`,
+            text: sentence,
+            isUser: false,
+            isDictation: true,
+          };
+          setMessages((prev) => [...prev, dictationMessage]);
+          saveMessage({ id: dictationMessage.id, agentId: selectedAgent.id, text: dictationMessage.text, isUser: false });
+          messageAlreadyDisplayed = true;
+          if (newResult.reply && newResult.reply.trim().length > 0) {
+            const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
+            setMessages((prev) => [...prev, finalMessage]);
+            saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
+          }
+          currentResult = newResult;
+          break;
+        }
+
         if (newResult.reply && newResult.reply.trim().length > 0) {
           const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
@@ -1116,6 +1168,28 @@ export default function HomeScreen() {
           agentSystemPrompt: selectedAgent.systemPrompt,
           agentId: selectedAgent.id,
         });
+
+        // 🆕 Détection de dictée
+        if (toolResult.startsWith('__DICTATION__:')) {
+          const sentence = toolResult.replace('__DICTATION__:', '');
+          const dictationMessage: ChatMessage = {
+            id: `agent-dictation-${Date.now()}`,
+            text: sentence,
+            isUser: false,
+            isDictation: true,
+          };
+          setMessages((prev) => [...prev, dictationMessage]);
+          saveMessage({ id: dictationMessage.id, agentId: selectedAgent.id, text: dictationMessage.text, isUser: false });
+          messageAlreadyDisplayed = true;
+          if (newResult.reply && newResult.reply.trim().length > 0) {
+            const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
+            setMessages((prev) => [...prev, finalMessage]);
+            saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
+          }
+          currentResult = newResult;
+          break;
+        }
+
         if (newResult.reply && newResult.reply.trim().length > 0) {
           const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);

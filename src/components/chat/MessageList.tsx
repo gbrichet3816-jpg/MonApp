@@ -9,6 +9,7 @@ export type ChatMessage = {
   id: string;
   text: string;
   isUser: boolean;
+  isDictation?: boolean;  // 🆕
 };
 
 type Props = {
@@ -19,7 +20,6 @@ type Props = {
 export default function MessageList({ messages, emptyText }: Props) {
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
-  // Scroll automatique vers le bas quand un nouveau message arrive
   useEffect(() => {
     if (messages.length > 0) {
       setTimeout(() => {
@@ -41,7 +41,14 @@ export default function MessageList({ messages, emptyText }: Props) {
       ref={listRef}
       data={messages}
       keyExtractor={(item) => item.id}
-      renderItem={({ item }) => <Message text={item.text} isUser={item.isUser} />}
+      renderItem={({ item }) => (
+        <Message
+          text={item.text}
+          isUser={item.isUser}
+          isDictation={item.isDictation}
+          autoSpeak={item.isDictation}  // 🆕 Lecture auto pour les dictées
+        />
+      )}
       contentContainerStyle={styles.listContent}
       onContentSizeChange={() => {
         listRef.current?.scrollToEnd({ animated: true });

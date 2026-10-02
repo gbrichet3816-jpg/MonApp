@@ -1,18 +1,36 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { speakText, stopSpeaking } from '@/config/speech';
+import { speakText, speakTextSlow, stopSpeaking } from '@/config/speech';
 import { Colors, Spacing } from '@/constants/theme';
 
 type Props = {
   text: string;
   isUser: boolean;
   autoSpeak?: boolean;
+  isDictation?: boolean;
 };
 
-export default function Message({ text, isUser, autoSpeak = false }: Props) {
+export default function Message({ text, isUser, autoSpeak = false, isDictation = false }: Props) {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isRevealed, setIsRevealed] = useState(false);
+
+  // 🆕 Lecture automatique pour les dictées
+  useEffect(() => {
+    if (isDictation && autoSpeak && !isUser) {
+      // Petite pause puis lecture lente
+      const timer = setTimeout(() => {
+        setIsPlaying(true);
+        speakTextSlow(text, () => {
+          setIsPlaying(false);
+        });
+      }, 500);
+      return () => {
+        clearTimeout(timer);
+      };
+    }
+  }, [isDictation, autoSpeak, isUser, text]);
 
   const handleSpeak = () => {
     if (isPlaying) {
@@ -20,16 +38,67 @@ export default function Message({ text, isUser, autoSpeak = false }: Props) {
       setIsPlaying(false);
       return;
     }
-
     setIsPlaying(true);
-    speakText(text, () => {
-      setIsPlaying(false);
-    });
+    if (isDictation) {
+      // Pour une dictée, lecture LENTE
+      speakTextSlow(text, () => {
+        setIsPlaying(false);
+      });
+    } else {
+      speakText(text, () => {
+        setIsPlaying(false);
+      });
+    }
   };
 
+  // 🆕 Affichage spécial pour les dictées non révélées
+  if (isDictation && !isRevealed) {
+    return (
+      <View style={[styles.container, styles.agentContainer]}>
+        <View style={[styles.bubble, styles.agentBubble, styles.dictationBubble]}>
+          <View style={styles.dictationHeader}>
+            <Ionicons name="mic-outline" size={16} color={Colors.light.primary} />
+            <Text style={styles.dictationLabel}>Dictée en cours</Text>
+          </View>
+          <Text style={styles.dictationHint}>
+            🔒 Écoute bien et écris la phrase sur ton cahier. Le texte est caché.
+          </Text>
+          <View style={styles.dictationActions}>
+            <TouchableOpacity style={styles.dictationButton} onPress={handleSpeak}>
+              <Ionicons
+                name={isPlaying ? 'stop-circle-outline' : 'volume-medium-outline'}
+                size={18}
+                color={Colors.light.background}
+              />
+              <Text style={styles.dictationButtonText}>
+                {isPlaying ? 'Arrêter' : 'Réécouter'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.dictationButton, styles.dictationButtonOutline]}
+              onPress={() => setIsRevealed(true)}
+            >
+              <Ionicons name="eye-outline" size={18} color={Colors.light.primary} />
+              <Text style={[styles.dictationButtonText, styles.dictationButtonTextOutline]}>
+                Révéler
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  // Message normal (ou dictée révélée)
   return (
     <View style={[styles.container, isUser ? styles.userContainer : styles.agentContainer]}>
       <View style={[styles.bubble, isUser ? styles.userBubble : styles.agentBubble]}>
+        {isDictation && (
+          <View style={styles.dictationHeader}>
+            <Ionicons name="mic-outline" size={16} color={Colors.light.primary} />
+            <Text style={styles.dictationLabel}>Dictée</Text>
+          </View>
+        )}
         <Text style={[styles.text, isUser ? styles.userText : styles.agentText]}>{text}</Text>
 
         {!isUser && (
@@ -85,5 +154,58 @@ const styles = StyleSheet.create({
   speakButton: {
     marginTop: Spacing.two,
     alignSelf: 'flex-start',
+  },
+  // 🆕 Styles pour la dictée
+  dictationBubble: {
+    backgroundColor: '#FFF8E1',
+    borderWidth: 2,
+    borderColor: Colors.light.primary,
+    borderStyle: 'dashed',
+  },
+  dictationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.two,
+    gap: Spacing.one,
+  },
+  dictationLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.light.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  dictationHint: {
+    fontSize: 14,
+    color: Colors.light.text,
+    marginBottom: Spacing.three,
+    lineHeight: 20,
+  },
+  dictationActions: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+    flexWrap: 'wrap',
+  },
+  dictationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+    backgroundColor: Colors.light.primary,
+    paddingVertical: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Spacing.two,
+  },
+  dictationButtonOutline: {
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: Colors.light.primary,
+  },
+  dictationButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.light.background,
+  },
+  dictationButtonTextOutline: {
+    color: Colors.light.primary,
   },
 });
