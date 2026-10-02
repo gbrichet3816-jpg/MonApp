@@ -1,7 +1,7 @@
 // src/agents/prof/helpers.ts
 // Fonctions utilitaires pour l'Agent Prof
 
-import { type ProfTopic } from './database';
+import { type ProfScheduleItem, type ProfTopic } from './database';
 
 /**
  * Détecte si un message contient un mot-clé "bilan" (demande du parent).
@@ -68,8 +68,7 @@ Le bilan doit être bref et proposer de commencer les apprentissages.`;
 }
 
 /**
- * 🆕 Formate les notions À REVOIR pour injection dans le prompt.
- * Utilisé quand Prof doit proposer spontanément une révision.
+ * Formate les notions À REVOIR pour injection dans le prompt.
  */
 export function formatTopicsToReview(topics: ProfTopic[]): string {
   if (topics.length === 0) return '';
@@ -97,6 +96,46 @@ export function formatTopicsToReview(topics: ProfTopic[]): string {
   lines.push(
     '💡 Propose à l\'enfant de réviser la première notion de la liste, en commençant par quelque chose de simple et court.'
   );
+
+  return lines.join('\n');
+}
+
+/**
+ * 🆕 Formate l'emploi du temps pour injection dans le prompt.
+ * Utilisé quand Prof doit consulter l'emploi du temps.
+ */
+export function formatScheduleForPrompt(items: ProfScheduleItem[]): string {
+  if (items.length === 0) {
+    return `## EMPLOI DU TEMPS
+
+Aucun emploi du temps n'a encore été enregistré.
+Demande gentiment à l'enfant de t'envoyer une photo de son emploi du temps.`;
+  }
+
+  const dayNames = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+  const byDay: Record<number, ProfScheduleItem[]> = {};
+
+  for (const item of items) {
+    if (!byDay[item.day_of_week]) byDay[item.day_of_week] = [];
+    byDay[item.day_of_week].push(item);
+  }
+
+  const lines: string[] = ['## EMPLOI DU TEMPS', ''];
+
+  for (let day = 0; day <= 6; day++) {
+    const dayItems = byDay[day];
+    if (!dayItems || dayItems.length === 0) continue;
+
+    lines.push(`${dayNames[day]} :`);
+    const sorted = dayItems.sort((a, b) => a.start_time.localeCompare(b.start_time));
+    for (const item of sorted) {
+      let line = `- ${item.start_time} - ${item.end_time} : ${item.subject}`;
+      if (item.room) line += ` (salle ${item.room})`;
+      if (item.teacher) line += ` avec ${item.teacher}`;
+      lines.push(line);
+    }
+    lines.push('');
+  }
 
   return lines.join('\n');
 }

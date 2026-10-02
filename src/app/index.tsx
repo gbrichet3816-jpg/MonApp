@@ -4,14 +4,18 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AGENTS } from '@/agents';
 import {
+  addScheduleItem,
   canOfferReviewToday,
+  clearSchedule,
   getAllTopics,
+  getSchedule,
   getTopicsToReview,
   markReviewOffered,
   openProfDatabase,
   saveTopicProgress,
 } from '@/agents/prof/database';
 import {
+  formatScheduleForPrompt,
   formatTopicsForPrompt,
   formatTopicsToReview,
   isBilanRequest,
@@ -68,6 +72,30 @@ function decodeBase64Utf8(base64: string): string {
   }
 }
 
+/**
+ * Détecte si un message parle de l'emploi du temps.
+ */
+function isScheduleQuestion(text: string): boolean {
+  const lower = text.toLowerCase();
+  const keywords = [
+    'emploi du temps',
+    'edt',
+    'qu\'est-ce que j\'ai',
+    'qu est ce que j ai',
+    'j\'ai quoi',
+    'j ai quoi',
+    'cours demain',
+    'cours lundi',
+    'cours mardi',
+    'cours mercredi',
+    'cours jeudi',
+    'cours vendredi',
+    'matière demain',
+    'matiere demain',
+  ];
+  return keywords.some((k) => lower.includes(k));
+}
+
 export default function HomeScreen() {
   const [agentMenuVisible, setAgentMenuVisible] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
@@ -109,18 +137,15 @@ export default function HomeScreen() {
             checkPendingReminders();
           }
         }, 500);
-
         return () => clearTimeout(timer);
       }
 
-      // 🆕 Détection des révisions espacées pour l'Agent Prof
       if (selectedAgentId === 'prof') {
         const timer = setTimeout(() => {
           if (isMounted.current) {
             checkReviewProposal();
           }
         }, 800);
-
         return () => clearTimeout(timer);
       }
     } else {
@@ -128,9 +153,6 @@ export default function HomeScreen() {
     }
   }, [selectedAgentId]);
 
-  /**
-   * 🆕 Vérifie s'il y a des notions à revoir et propose spontanément une révision.
-   */
   const checkReviewProposal = async () => {
     try {
       const profile = getLocalProfile();
@@ -138,23 +160,17 @@ export default function HomeScreen() {
       const userId = profile.code ?? 'default';
 
       const db = await openProfDatabase();
-
-      // Vérifier qu'on n'a pas déjà proposé aujourd'hui
       const canOffer = await canOfferReviewToday(db, userId);
       if (!canOffer) return;
 
-      // Récupérer les notions à revoir
       const topics = await getTopicsToReview(db, userId);
       if (topics.length === 0) return;
 
-      // Marquer comme proposé AVANT l'appel pour éviter les doublons
       await markReviewOffered(db, userId);
 
-      // Construire le prompt enrichi
       const topicsText = formatTopicsToReview(topics);
-      const enrichedPrompt = `${PROF_SYSTEM_PROMPT_GENERIC_FOR_REVIEW}\n\n${topicsText}`;
+      const enrichedPrompt = `${PROF_REVIEW_PROMPT}\n\n${topicsText}`;
 
-      // Appeler Prof pour qu'il formule le message
       const apiMessages: ApiMessage[] = [
         {
           role: 'user',
@@ -245,28 +261,43 @@ export default function HomeScreen() {
           const profDb = await openProfDatabase();
           const profile = getLocalProfile();
           const userId = profile?.code ?? 'default';
-          await saveTopicProgress(
-            profDb,
-            userId,
-            args.subject,
-            args.topic,
-            args.result,
-          );
+          await saveTopicProgress(profDb, userId, args.subject, args.topic, args.result);
         } catch (e) {
           console.warn('[Prof] Impossible de sauvegarder la notion:', e);
         }
+      } else if (call.name === 'saveScheduleFromImage') {
+        try {
+          const profDb = await openProfDatabase();
+          const profile = getLocalProfile();
+          const userId = profile?.code ?? 'default';
+
+          // On efface l'ancien emploi du temps et on remplace
+          await clearSchedule(profDb, userId);
+
+          for (const item of args.items) {
+            await addScheduleItem(profDb, {
+              user_id: userId,
+              day_of_week: item.day_of_week,
+              start_time: item.start_time,
+              end_time: item.end_time,
+              subject: item.subject,
+              room: item.room,
+              teacher: item.teacher,
+            });
+          }
+        } catch (e) {
+          console.warn('[Prof] Impossible de sauvegarder l\'emploi du temps:', e);
+        }
+      } else if (call.name === 'getSchedule') {
+        // On laisse Prof recevoir les données via le prompt injecté (voir handleSend)
+        // Ici, on ne fait rien de plus
       } else if (call.name === 'createDailyReminders') {
         const medicationName = args.medicationName;
         const times: string[] = args.times || [];
-
         if (times.length === 0) continue;
 
         const baseId = `reminder-${Date.now()}`;
-        const results = await scheduleMultipleDailyReminders({
-          medicationName,
-          times,
-          baseId,
-        });
+        const results = await scheduleMultipleDailyReminders({ medicationName, times, baseId });
 
         if (results.length > 0) {
           results.forEach((r) => {
@@ -279,34 +310,25 @@ export default function HomeScreen() {
               reminderType: 'daily',
             });
           });
-
           const timesFormatted = times.map((t) => t.replace(':', 'h')).join(', ');
-          const suffix = times.length > 1 ? 's' : '';
-
           resultMessages.push({
             id: `agent-${Date.now()}-rem`,
-            text: `C'est noté ! Je te rappellerai tous les jours à ${timesFormatted} de prendre ${medicationName}. (${times.length} rappel${suffix})`,
+            text: `C'est noté ! Je te rappellerai tous les jours à ${timesFormatted} de prendre ${medicationName}.`,
             isUser: false,
           });
         }
       } else if (call.name === 'createOneTimeReminders') {
         const medicationName = args.medicationName;
         const dateTimes: string[] = args.dateTimes || [];
-
         if (dateTimes.length === 0) continue;
 
         const baseId = `reminder-${Date.now()}`;
-        const results = await scheduleMultipleOneTimeReminders({
-          medicationName,
-          dateTimes,
-          baseId,
-        });
+        const results = await scheduleMultipleOneTimeReminders({ medicationName, dateTimes, baseId });
 
         if (results.length > 0) {
           results.forEach((r) => {
             const date = new Date(r.scheduledAt);
             const timeStr = `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-
             saveReminder({
               id: r.reminderId,
               agentId,
@@ -317,11 +339,9 @@ export default function HomeScreen() {
               scheduledAt: r.scheduledAt,
             });
           });
-
-          const suffix = results.length > 1 ? 's' : '';
           resultMessages.push({
             id: `agent-${Date.now()}-rem`,
-            text: `C'est noté ! J'ai créé ${results.length} rappel${suffix} pour ${medicationName}.`,
+            text: `C'est noté ! J'ai créé ${results.length} rappel(s) pour ${medicationName}.`,
             isUser: false,
           });
         }
@@ -362,7 +382,7 @@ export default function HomeScreen() {
         savePreference(args.preferenceKey, args.preferenceValue);
         resultMessages.push({
           id: `agent-${Date.now()}-pref`,
-          text: `C'est noté ! J'ai bien enregistré ta préférence.`,
+          text: `C'est noté !`,
           isUser: false,
         });
       } else if (call.name === 'cancelReminders') {
@@ -386,16 +406,16 @@ export default function HomeScreen() {
         if (reminders.length === 0) {
           resultMessages.push({
             id: `agent-${Date.now()}-list`,
-            text: `Tu n'as aucun rappel actif pour le moment.`,
+            text: `Tu n'as aucun rappel actif.`,
             isUser: false,
           });
         } else {
           const list = reminders
-            .map((r) => `• ${r.medication_name} à ${r.time.replace(':', 'h')} (${r.reminder_type === 'daily' ? 'tous les jours' : r.reminder_type === 'onetime' ? 'une fois' : 'relatif'})`)
+            .map((r) => `• ${r.medication_name} à ${r.time.replace(':', 'h')}`)
             .join('\n');
           resultMessages.push({
             id: `agent-${Date.now()}-list`,
-            text: `Voici tes rappels actifs :\n\n${list}`,
+            text: `Voici tes rappels :\n\n${list}`,
             isUser: false,
           });
         }
@@ -445,6 +465,8 @@ export default function HomeScreen() {
 
     try {
       let systemPrompt = selectedAgent.systemPrompt;
+
+      // Injection pour le bilan
       if (selectedAgent.id === 'prof' && isBilanRequest(text)) {
         try {
           const profDb = await openProfDatabase();
@@ -454,7 +476,21 @@ export default function HomeScreen() {
           const dataText = formatTopicsForPrompt(topics);
           systemPrompt = `${systemPrompt}\n\n${dataText}`;
         } catch (e) {
-          console.warn('[Prof] Impossible de charger les données de progression:', e);
+          console.warn('[Prof] Erreur chargement progression:', e);
+        }
+      }
+
+      // 🆕 Injection pour l'emploi du temps
+      if (selectedAgent.id === 'prof' && isScheduleQuestion(text)) {
+        try {
+          const profDb = await openProfDatabase();
+          const profile = getLocalProfile();
+          const userId = profile?.code ?? 'default';
+          const schedule = await getSchedule(profDb, userId);
+          const scheduleText = formatScheduleForPrompt(schedule);
+          systemPrompt = `${systemPrompt}\n\n${scheduleText}`;
+        } catch (e) {
+          console.warn('[Prof] Erreur chargement emploi du temps:', e);
         }
       }
 
@@ -498,7 +534,6 @@ export default function HomeScreen() {
           isUser: false,
         };
         setMessages((prev) => [...prev, agentMessage]);
-
         saveMessage({
           id: agentMessage.id,
           agentId: selectedAgent.id,
@@ -508,7 +543,6 @@ export default function HomeScreen() {
       }
     } catch (error) {
       if (!isMounted.current) return;
-
       const errorMessage: ChatMessage = {
         id: `error-${Date.now()}`,
         text: `Erreur : ${error instanceof Error ? error.message : 'inconnue'}`,
@@ -516,9 +550,7 @@ export default function HomeScreen() {
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
-      if (isMounted.current) {
-        setIsLoading(false);
-      }
+      if (isMounted.current) setIsLoading(false);
     }
   };
 
@@ -534,7 +566,6 @@ export default function HomeScreen() {
     if (action === 'save') {
       const docId = `doc-file-${Date.now()}`;
       const savedPath = await saveFileToDocuments(pendingFile.uri, pendingFile.fileName);
-
       saveDocument({
         id: docId,
         agentId: selectedAgent.id,
@@ -543,7 +574,6 @@ export default function HomeScreen() {
         filePath: savedPath || undefined,
         fileType: pendingFile.mimeType,
       });
-
       Alert.alert('Enregistré !', `"${pendingFile.title}" est dans ta bibliothèque.`);
       setPendingFile(null);
       return;
@@ -552,7 +582,6 @@ export default function HomeScreen() {
     if (action === 'agent+save') {
       const docId = `doc-file-${Date.now()}`;
       const savedPath = await saveFileToDocuments(pendingFile.uri, pendingFile.fileName);
-
       saveDocument({
         id: docId,
         agentId: selectedAgent.id,
@@ -597,30 +626,24 @@ export default function HomeScreen() {
       if (isImage && pendingFile.base64) {
         content = [
           { type: 'text', text: userText },
-          {
-            type: 'image_url',
-            image_url: { url: `data:${pendingFile.mimeType};base64,${pendingFile.base64}` },
-          },
+          { type: 'image_url', image_url: { url: `data:${pendingFile.mimeType};base64,${pendingFile.base64}` } },
         ];
       } else if (isPdf && pendingFile.base64) {
         const extractResult = await extractPdfText(pendingFile.base64);
-
         if (extractResult.success && extractResult.text) {
           const pdfText = extractResult.text.slice(0, 15000);
-          content = `${userText}\n\n--- Contenu du PDF "${pendingFile.fileName}" (${extractResult.pages} pages) ---\n\n${pdfText}`;
+          content = `${userText}\n\n--- Contenu du PDF ---\n\n${pdfText}`;
         } else {
-          content = `${userText}\n\n[Impossible d'extraire le texte du PDF : ${extractResult.error || 'inconnu'}]`;
+          content = `${userText}\n\n[Impossible d'extraire le PDF]`;
         }
       } else if (isText && pendingFile.base64) {
         try {
           const decodedText = decodeBase64Utf8(pendingFile.base64);
           const textContent = decodedText.slice(0, 15000);
-          content = `${userText}\n\n--- Contenu du fichier "${pendingFile.fileName}" ---\n\n${textContent}`;
+          content = `${userText}\n\n--- Contenu du fichier ---\n\n${textContent}`;
         } catch (e) {
-          content = `${userText}\n\n[Impossible de lire le contenu du fichier : ${e}]`;
+          content = `${userText}\n\n[Impossible de lire le fichier : ${e}]`;
         }
-      } else if (!isImage) {
-        content = `[Fichier : ${pendingFile.fileName}]\n${message || 'Fichier envoyé'}`;
       }
 
       const apiMessages: ApiMessage[] = [
@@ -642,23 +665,14 @@ export default function HomeScreen() {
 
       if (result.toolCalls && result.toolCalls.length > 0) {
         await handleToolCalls(result.toolCalls, selectedAgent.id);
-
-        const finalText = result.reply && result.reply.trim().length > 0
-          ? result.reply
-          : "C'est fait !";
-
+        const finalText = result.reply && result.reply.trim().length > 0 ? result.reply : "C'est fait !";
         const finalMessage: ChatMessage = {
           id: `agent-${Date.now()}`,
           text: finalText,
           isUser: false,
         };
         setMessages((prev) => [...prev, finalMessage]);
-        saveMessage({
-          id: finalMessage.id,
-          agentId: selectedAgent.id,
-          text: finalMessage.text,
-          isUser: false,
-        });
+        saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
       } else {
         const agentMessage: ChatMessage = {
           id: `agent-${Date.now()}`,
@@ -666,12 +680,7 @@ export default function HomeScreen() {
           isUser: false,
         };
         setMessages((prev) => [...prev, agentMessage]);
-        saveMessage({
-          id: agentMessage.id,
-          agentId: selectedAgent.id,
-          text: agentMessage.text,
-          isUser: false,
-        });
+        saveMessage({ id: agentMessage.id, agentId: selectedAgent.id, text: agentMessage.text, isUser: false });
       }
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -704,7 +713,6 @@ export default function HomeScreen() {
       const docId = `doc-photo-${Date.now()}`;
       const fileName = `photo_${Date.now()}.jpg`;
       const savedPath = await saveFileToDocuments(pendingPhoto.uri, fileName);
-
       saveDocument({
         id: docId,
         agentId: selectedAgent.id,
@@ -713,7 +721,6 @@ export default function HomeScreen() {
         filePath: savedPath || undefined,
         fileType: 'image/jpeg',
       });
-
       Alert.alert('Enregistré !', 'Photo enregistrée dans ta bibliothèque.');
       setPendingPhoto(null);
       return;
@@ -723,7 +730,6 @@ export default function HomeScreen() {
       const docId = `doc-photo-${Date.now()}`;
       const fileName = `photo_${Date.now()}.jpg`;
       const savedPath = await saveFileToDocuments(pendingPhoto.uri, fileName);
-
       saveDocument({
         id: docId,
         agentId: selectedAgent.id,
@@ -756,10 +762,7 @@ export default function HomeScreen() {
       const content: any = pendingPhoto.base64
         ? [
             { type: 'text', text: userText },
-            {
-              type: 'image_url',
-              image_url: { url: `data:image/jpeg;base64,${pendingPhoto.base64}` },
-            },
+            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${pendingPhoto.base64}` } },
           ]
         : `[Photo envoyée sans message]`;
 
@@ -782,23 +785,14 @@ export default function HomeScreen() {
 
       if (result.toolCalls && result.toolCalls.length > 0) {
         await handleToolCalls(result.toolCalls, selectedAgent.id);
-
-        const finalText = result.reply && result.reply.trim().length > 0
-          ? result.reply
-          : "C'est fait !";
-
+        const finalText = result.reply && result.reply.trim().length > 0 ? result.reply : "C'est fait !";
         const finalMessage: ChatMessage = {
           id: `agent-${Date.now()}`,
           text: finalText,
           isUser: false,
         };
         setMessages((prev) => [...prev, finalMessage]);
-        saveMessage({
-          id: finalMessage.id,
-          agentId: selectedAgent.id,
-          text: finalMessage.text,
-          isUser: false,
-        });
+        saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
       } else {
         const agentMessage: ChatMessage = {
           id: `agent-${Date.now()}`,
@@ -806,12 +800,7 @@ export default function HomeScreen() {
           isUser: false,
         };
         setMessages((prev) => [...prev, agentMessage]);
-        saveMessage({
-          id: agentMessage.id,
-          agentId: selectedAgent.id,
-          text: agentMessage.text,
-          isUser: false,
-        });
+        saveMessage({ id: agentMessage.id, agentId: selectedAgent.id, text: agentMessage.text, isUser: false });
       }
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -892,9 +881,8 @@ export default function HomeScreen() {
   );
 }
 
-// ⚠️ Cette constante est définie ici pour éviter les imports circulaires.
-// Elle sera remplacée par le vrai prompt côté serveur.
-const PROF_SYSTEM_PROMPT_GENERIC_FOR_REVIEW = `Tu es "Prof". Tu viens de recevoir des notions à revoir.
+// ⚠️ Prompt utilisé pour la proposition spontanée de révision
+const PROF_REVIEW_PROMPT = `Tu es "Prof". Tu viens de recevoir des notions à revoir.
 Propose spontanément une révision à l'enfant avec un message COURT (2-3 lignes max).
 Ton chaleureux, léger, avec une porte de sortie ("tu veux ?").
 Format : "Salut ! 👋 Ça fait X jours qu'on n'a pas revu [notion]. Tu veux un petit exercice ? Ça prendra 3 minutes."`;
