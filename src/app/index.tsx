@@ -137,6 +137,11 @@ export default function HomeScreen() {
     });
   };
 
+  /**
+   * Exécute les tool calls et retourne les messages à afficher.
+   * ⚠️ MODIFIÉ : les messages de confirmation ne sont plus poussés ici.
+   * On les intègre dans la réponse finale de l'IA (dans handleSend).
+   */
   const handleToolCalls = async (
     toolCalls: ToolCall[],
     agentId: string,
@@ -154,11 +159,8 @@ export default function HomeScreen() {
           title: args.title,
           content: args.content,
         });
-        resultMessages.push({
-          id: `agent-${Date.now()}-doc`,
-          text: `C'est fait ! J'ai créé "${args.title}" dans ta bibliothèque.`,
-          isUser: false,
-        });
+        // ⚠️ On NE pousse PLUS de message ici.
+        // L'IA va confirmer elle-même dans sa réponse (result.reply).
       } else if (call.name === 'createDailyReminders') {
         const medicationName = args.medicationName;
         const times: string[] = args.times || [];
@@ -363,32 +365,28 @@ export default function HomeScreen() {
       if (!isMounted.current) return;
 
       if (result.toolCalls && result.toolCalls.length > 0) {
-        const toolMessages = await handleToolCalls(result.toolCalls, selectedAgent.id);
+        // On exécute les tools (sauvegarde en base) SANS afficher de message auto
+        await handleToolCalls(result.toolCalls, selectedAgent.id);
 
-        toolMessages.forEach((msg) => {
-          setMessages((prev) => [...prev, msg]);
-          saveMessage({
-            id: msg.id,
-            agentId: selectedAgent.id,
-            text: msg.text,
-            isUser: false,
-          });
+        // Un seul message final :
+        // - Si l'IA a répondu (result.reply) → on affiche SA réponse
+        // - Si l'IA n'a rien dit → on affiche un message de confirmation générique
+        const finalText = result.reply && result.reply.trim().length > 0
+          ? result.reply
+          : "C'est fait !";
+
+        const finalMessage: ChatMessage = {
+          id: `agent-${Date.now()}`,
+          text: finalText,
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, finalMessage]);
+        saveMessage({
+          id: finalMessage.id,
+          agentId: selectedAgent.id,
+          text: finalMessage.text,
+          isUser: false,
         });
-
-        if (result.reply) {
-          const replyMessage: ChatMessage = {
-            id: `agent-reply-${Date.now()}`,
-            text: result.reply,
-            isUser: false,
-          };
-          setMessages((prev) => [...prev, replyMessage]);
-          saveMessage({
-            id: replyMessage.id,
-            agentId: selectedAgent.id,
-            text: replyMessage.text,
-            isUser: false,
-          });
-        }
       } else {
         const agentMessage: ChatMessage = {
           id: `agent-${Date.now()}`,
@@ -541,18 +539,39 @@ export default function HomeScreen() {
 
       if (!isMounted.current) return;
 
-      const agentMessage: ChatMessage = {
-        id: `agent-${Date.now()}`,
-        text: result.reply || '(pas de réponse)',
-        isUser: false,
-      };
-      setMessages((prev) => [...prev, agentMessage]);
-      saveMessage({
-        id: agentMessage.id,
-        agentId: selectedAgent.id,
-        text: agentMessage.text,
-        isUser: false,
-      });
+      if (result.toolCalls && result.toolCalls.length > 0) {
+        await handleToolCalls(result.toolCalls, selectedAgent.id);
+
+        const finalText = result.reply && result.reply.trim().length > 0
+          ? result.reply
+          : "C'est fait !";
+
+        const finalMessage: ChatMessage = {
+          id: `agent-${Date.now()}`,
+          text: finalText,
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, finalMessage]);
+        saveMessage({
+          id: finalMessage.id,
+          agentId: selectedAgent.id,
+          text: finalMessage.text,
+          isUser: false,
+        });
+      } else {
+        const agentMessage: ChatMessage = {
+          id: `agent-${Date.now()}`,
+          text: result.reply || '(pas de réponse)',
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, agentMessage]);
+        saveMessage({
+          id: agentMessage.id,
+          agentId: selectedAgent.id,
+          text: agentMessage.text,
+          isUser: false,
+        });
+      }
     } catch (error) {
       const errorMessage: ChatMessage = {
         id: `error-${Date.now()}`,
@@ -663,18 +682,39 @@ export default function HomeScreen() {
 
       if (!isMounted.current) return;
 
-      const agentMessage: ChatMessage = {
-        id: `agent-${Date.now()}`,
-        text: result.reply || '(pas de réponse)',
-        isUser: false,
-      };
-      setMessages((prev) => [...prev, agentMessage]);
-      saveMessage({
-        id: agentMessage.id,
-        agentId: selectedAgent.id,
-        text: agentMessage.text,
-        isUser: false,
-      });
+      if (result.toolCalls && result.toolCalls.length > 0) {
+        await handleToolCalls(result.toolCalls, selectedAgent.id);
+
+        const finalText = result.reply && result.reply.trim().length > 0
+          ? result.reply
+          : "C'est fait !";
+
+        const finalMessage: ChatMessage = {
+          id: `agent-${Date.now()}`,
+          text: finalText,
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, finalMessage]);
+        saveMessage({
+          id: finalMessage.id,
+          agentId: selectedAgent.id,
+          text: finalMessage.text,
+          isUser: false,
+        });
+      } else {
+        const agentMessage: ChatMessage = {
+          id: `agent-${Date.now()}`,
+          text: result.reply || '(pas de réponse)',
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, agentMessage]);
+        saveMessage({
+          id: agentMessage.id,
+          agentId: selectedAgent.id,
+          text: agentMessage.text,
+          isUser: false,
+        });
+      }
     } catch (error) {
       const errorMessage: ChatMessage = {
         id: `error-${Date.now()}`,
