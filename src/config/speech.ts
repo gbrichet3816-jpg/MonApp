@@ -40,50 +40,147 @@ export function cleanTextForSpeech(text: string): string {
   cleaned = cleaned.replace(/[「」『』【】《》]/g, '');
 
   // 3. Retirer le markdown
-  cleaned = cleaned.replace(/\*\*(.+?)\*\*/g, '$1'); // **gras**
-  cleaned = cleaned.replace(/\*(.+?)\*/g, '$1');     // *italique*
-  cleaned = cleaned.replace(/__(.+?)__/g, '$1');     // __gras__
-  cleaned = cleaned.replace(/_(.+?)_/g, '$1');       // _italique_
-  cleaned = cleaned.replace(/`([^`]+)`/g, '$1');     // `code`
-  cleaned = cleaned.replace(/~~(.+?)~~/g, '$1');     // ~~barré~~
+  cleaned = cleaned.replace(/\*\*(.+?)\*\*/g, '$1');
+  cleaned = cleaned.replace(/\*(.+?)\*/g, '$1');
+  cleaned = cleaned.replace(/__(.+?)__/g, '$1');
+  cleaned = cleaned.replace(/_(.+?)_/g, '$1');
+  cleaned = cleaned.replace(/`([^`]+)`/g, '$1');
+  cleaned = cleaned.replace(/~~(.+?)~~/g, '$1');
 
   // 4. Retirer les titres markdown (#, ##, ###)
   cleaned = cleaned.replace(/^#{1,6}\s+/gm, '');
 
-  // 5. Convertir les tirets de liste en pauses (retirer le "-" en début de ligne)
+  // 5. Convertir les tirets de liste en pauses
   cleaned = cleaned.replace(/^\s*[-*+]\s+/gm, '');
 
-  // 6. Convertir les numéros de liste "1." "2." en gardant le chiffre (utile à l'oral)
-  //    (on les garde tels quels, la TTS lit bien "1." comme "un")
-
-  // 7. Retirer les deux-points orphelins et autres ponctuations bizarres
+  // 6. Retirer les ponctuations orphelines
   cleaned = cleaned.replace(/\s*[:;]\s*$/gm, '');
 
-  // 8. Retirer les caractères de contrôle invisibles
+  // 7. Retirer les caractères de contrôle invisibles
   cleaned = cleaned.replace(/[\u200B-\u200D\uFEFF]/g, '');
 
-  // 9. Remplacer les sauts de ligne multiples par un point (pause)
+  // 8. Remplacer les sauts de ligne multiples par un point
   cleaned = cleaned.replace(/\n{2,}/g, '. ');
   cleaned = cleaned.replace(/\n/g, ' ');
 
-  // 10. Normaliser les espaces multiples
+  // 9. Normaliser les espaces multiples
   cleaned = cleaned.replace(/\s{2,}/g, ' ');
 
-  // 11. Retirer les espaces avant ponctuation
+  // 10. Retirer les espaces avant ponctuation
   cleaned = cleaned.replace(/\s+([.,!?;:])/g, '$1');
 
-  // 12. Retirer les points multiples
+  // 11. Retirer les points multiples
   cleaned = cleaned.replace(/\.{2,}/g, '.');
 
-  // 13. Trim final
+  // 12. Trim final
   cleaned = cleaned.trim();
 
   return cleaned;
 }
 
 /**
+ * 🆕 Découpe un texte long en morceaux (~400 caractères chacun)
+ * en coupant intelligemment aux frontières de phrases.
+ */
+function splitTextIntoChunks(text: string, maxChunkSize: number = 400): string[] {
+  // 1. Découper en phrases
+  const sentences = text.match(/[^.!?]+[.!?]+(\s|$)/g) || [text];
+
+  // 2. Regrouper en chunks
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const sentence of sentences) {
+    if ((current + sentence).length > maxChunkSize) {
+      if (current.trim()) {
+        chunks.push(current.trim());
+      }
+      // Si une seule phrase dépasse maxChunkSize, on la coupe brutalement
+      if (sentence.length > maxChunkSize) {
+        let remaining = sentence;
+        while (remaining.length > maxChunkSize) {
+          chunks.push(remaining.slice(0, maxChunkSize).trim());
+          remaining = remaining.slice(maxChunkSize);
+        }
+        current = remaining;
+      } else {
+        current = sentence;
+      }
+    } else {
+      current += sentence;
+    }
+  }
+  if (current.trim()) {
+    chunks.push(current.trim());
+  }
+
+  return chunks;
+}
+
+/**
+ * 🆕 Lit un texte LONG en le découpant en morceaux.
+ * Enchaîne les lectures bout à bout pour un effet continu.
+ */
+function speakLongText(
+  text: string,
+  rate: number,
+  onDone?: () => void,
+  onError?: () => void
+) {
+  const chunks = splitTextIntoChunks(text);
+
+  if (chunks.length === 0) {
+    isSpeaking = false;
+    onDone?.();
+    return;
+  }
+
+  let currentIndex = 0;
+
+  const speakNext = () => {
+    if (currentIndex >= chunks.length) {
+      isSpeaking = false;
+      onDone?.();
+      return;
+    }
+
+    const chunk = chunks[currentIndex];
+    currentIndex++;
+
+    Speech.speak(chunk, {
+      language: 'fr-FR',
+      pitch: 1.0,
+      rate: rate,
+      onDone: () => {
+        // Petit délai pour une pause naturelle entre les morceaux
+        setTimeout(() => {
+          if (isSpeaking) {
+            speakNext();
+          }
+        }, 100);
+      },
+      onStopped: () => {
+        isSpeaking = false;
+      },
+      onError: (err) => {
+        console.warn('[Speech] Erreur sur un chunk:', err);
+        // On essaie de continuer malgré tout
+        setTimeout(() => {
+          if (isSpeaking) {
+            speakNext();
+          }
+        }, 100);
+      },
+    });
+  };
+
+  speakNext();
+}
+
+/**
  * Lit un texte à voix haute en français.
- * Le texte est nettoyé avant d'être lu (retire emojis, markdown, symboles).
+ * Le texte est nettoyé avant d'être lu.
+ * Pour les textes longs (> 800 car), découpage automatique en morceaux.
  */
 export function speakText(text: string, onDone?: () => void) {
   Speech.stop();
@@ -97,26 +194,39 @@ export function speakText(text: string, onDone?: () => void) {
 
   isSpeaking = true;
 
-  Speech.speak(cleanText, {
-    language: 'fr-FR',
-    pitch: 1.0,
-    rate: 0.95,
-    onDone: () => {
-      isSpeaking = false;
-      onDone?.();
-    },
-    onStopped: () => {
-      isSpeaking = false;
-    },
-    onError: () => {
-      isSpeaking = false;
-    },
-  });
+  // 🆕 Si le texte est court, lecture directe
+  if (cleanText.length < 800) {
+    Speech.speak(cleanText, {
+      language: 'fr-FR',
+      pitch: 1.0,
+      rate: 0.95,
+      onDone: () => {
+        isSpeaking = false;
+        onDone?.();
+      },
+      onStopped: () => {
+        isSpeaking = false;
+      },
+      onError: () => {
+        isSpeaking = false;
+        onDone?.();
+      },
+    });
+  } else {
+    // 🆕 Sinon, découpage en morceaux
+    speakLongText(
+      cleanText,
+      0.95,
+      () => onDone?.(),
+      () => onDone?.()
+    );
+  }
 }
 
 /**
- * Lit un texte lentement (utile pour les dictées).
+ * Lit un texte LENTEMENT (utile pour les dictées).
  * Le texte est nettoyé avant d'être lu.
+ * Pour les textes longs (> 800 car), découpage automatique.
  */
 export function speakTextSlow(text: string, onDone?: () => void) {
   Speech.stop();
@@ -130,21 +240,31 @@ export function speakTextSlow(text: string, onDone?: () => void) {
 
   isSpeaking = true;
 
-  Speech.speak(cleanText, {
-    language: 'fr-FR',
-    pitch: 1.0,
-    rate: 0.6, // ← plus lent pour les dictées
-    onDone: () => {
-      isSpeaking = false;
-      onDone?.();
-    },
-    onStopped: () => {
-      isSpeaking = false;
-    },
-    onError: () => {
-      isSpeaking = false;
-    },
-  });
+  if (cleanText.length < 800) {
+    Speech.speak(cleanText, {
+      language: 'fr-FR',
+      pitch: 1.0,
+      rate: 0.6,
+      onDone: () => {
+        isSpeaking = false;
+        onDone?.();
+      },
+      onStopped: () => {
+        isSpeaking = false;
+      },
+      onError: () => {
+        isSpeaking = false;
+        onDone?.();
+      },
+    });
+  } else {
+    speakLongText(
+      cleanText,
+      0.6,
+      () => onDone?.(),
+      () => onDone?.()
+    );
+  }
 }
 
 /**

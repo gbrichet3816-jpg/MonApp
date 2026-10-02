@@ -425,12 +425,12 @@ export default function HomeScreen() {
       const profile = getLocalProfile();
       const userId = profile?.code ?? 'default';
 
-      // 🆕 DICTÉE
+      // 🆕 DICTÉE (multi-phrases)
       if (call.name === 'startDictation') {
-        const sentence = args.sentence || '';
-        if (!sentence) return 'Aucune phrase fournie.';
-        // Retourner un marqueur spécial qui sera détecté par handleSend
-        return `__DICTATION__:${sentence}`;
+        const sentences: string[] = args.sentences || [];
+        if (!sentences.length) return 'Aucune phrase fournie.';
+        // On renvoie un marqueur avec les phrases séparées par \n
+        return `__DICTATION__:${sentences.join('\n')}`;
       }
 
       if (call.name === 'listGrades') {
@@ -840,10 +840,10 @@ export default function HomeScreen() {
 
         // 🆕 Détection de dictée
         if (toolResult.startsWith('__DICTATION__:')) {
-          const sentence = toolResult.replace('__DICTATION__:', '');
+          const sentences = toolResult.replace('__DICTATION__:', '');
           const dictationMessage: ChatMessage = {
             id: `agent-dictation-${Date.now()}`,
-            text: sentence,
+            text: sentences,
             isUser: false,
             isDictation: true,
           };
@@ -1016,12 +1016,11 @@ export default function HomeScreen() {
           agentId: selectedAgent.id,
         });
 
-        // 🆕 Détection de dictée
         if (toolResult.startsWith('__DICTATION__:')) {
-          const sentence = toolResult.replace('__DICTATION__:', '');
+          const sentences = toolResult.replace('__DICTATION__:', '');
           const dictationMessage: ChatMessage = {
             id: `agent-dictation-${Date.now()}`,
-            text: sentence,
+            text: sentences,
             isUser: false,
             isDictation: true,
           };
@@ -1169,12 +1168,11 @@ export default function HomeScreen() {
           agentId: selectedAgent.id,
         });
 
-        // 🆕 Détection de dictée
         if (toolResult.startsWith('__DICTATION__:')) {
-          const sentence = toolResult.replace('__DICTATION__:', '');
+          const sentences = toolResult.replace('__DICTATION__:', '');
           const dictationMessage: ChatMessage = {
             id: `agent-dictation-${Date.now()}`,
-            text: sentence,
+            text: sentences,
             isUser: false,
             isDictation: true,
           };
