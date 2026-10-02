@@ -8,11 +8,14 @@ import {
   canOfferReviewToday,
   clearSchedule,
   getAllTopics,
+  getProfState,
   getSchedule,
   getTopicsToReview,
+  markMorningBriefingSent,
   markReviewOffered,
   openProfDatabase,
   saveTopicProgress,
+  wasMorningBriefingSentToday,
 } from '@/agents/prof/database';
 import {
   formatScheduleForPrompt,
@@ -20,6 +23,9 @@ import {
   formatTopicsToReview,
   isBilanRequest,
 } from '@/agents/prof/helpers';
+import {
+  scheduleMorningBriefing
+} from '@/agents/prof/notifications';
 import {
   scheduleMultipleDailyReminders,
   scheduleMultipleOneTimeReminders,
@@ -73,20 +79,12 @@ function decodeBase64Utf8(base64: string): string {
 function isScheduleQuestion(text: string): boolean {
   const lower = text.toLowerCase();
   const keywords = [
-    'emploi du temps',
-    'edt',
-    'qu\'est-ce que j\'ai',
-    'qu est ce que j ai',
-    'j\'ai quoi',
-    'j ai quoi',
-    'cours demain',
-    'cours lundi',
-    'cours mardi',
-    'cours mercredi',
-    'cours jeudi',
-    'cours vendredi',
-    'matière demain',
-    'matiere demain',
+    'emploi du temps', 'edt',
+    'qu\'est-ce que j\'ai', 'qu est ce que j ai',
+    'j\'ai quoi', 'j ai quoi',
+    'cours demain', 'cours lundi', 'cours mardi', 'cours mercredi',
+    'cours jeudi', 'cours vendredi',
+    'matière demain', 'matiere demain',
     'cette semaine',
   ];
   return keywords.some((k) => lower.includes(k));
@@ -126,13 +124,105 @@ export default function HomeScreen() {
         return () => clearTimeout(timer);
       }
       if (selectedAgentId === 'prof') {
-        const timer = setTimeout(() => { if (isMounted.current) checkReviewProposal(); }, 800);
+        const timer = setTimeout(() => {
+          if (isMounted.current) {
+            checkReviewProposal();
+            checkMorningBriefing();
+          }
+        }, 800);
         return () => clearTimeout(timer);
       }
     } else {
       setMessages([]);
     }
   }, [selectedAgentId]);
+
+  /**
+   * 🆕 Vérifie si on doit afficher le briefing du matin.
+   * Si l'heure est passée et qu'on ne l'a pas encore envoyé aujourd'hui, on envoie.
+   */
+  const checkMorningBriefing = async () => {
+    try {
+      const profile = getLocalProfile();
+      if (!profile) return;
+      const userId = profile.code ?? 'default';
+
+      const db = await openProfDatabase();
+      const state = await getProfState(db, userId);
+
+      // Pas activé → rien à faire
+      if (!state.morning_briefing_enabled) return;
+
+      // Déjà envoyé aujourd'hui → rien à faire
+      const alreadySent = await wasMorningBriefingSentToday(db, userId);
+      if (alreadySent) return;
+
+      // Il faut qu'on soit APRÈS l'heure du briefing
+      const now = new Date();
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const briefingMinutes = state.morning_briefing_hour * 60 + state.morning_briefing_minute;
+
+      if (currentMinutes < briefingMinutes) return;
+
+      // OK, on envoie le briefing
+      await sendMorningBriefing(db, userId, state.morning_briefing_hour, state.morning_briefing_minute);
+    } catch (e) {
+      console.warn('[Prof] Erreur checkMorningBriefing:', e);
+    }
+  };
+
+  /**
+   * 🆕 Envoie le briefing du matin (message dans le chat).
+   */
+  const sendMorningBriefing = async (
+    db: any,
+    userId: string,
+    hour: number,
+    minute: number
+  ) => {
+    try {
+      // Récupérer l'emploi du temps du jour
+      const today = new Date();
+      const jsDay = today.getDay(); // 0=dimanche, 1=lundi...
+      const dayOfWeek = jsDay === 0 ? 6 : jsDay - 1; // 0=lundi, 6=dimanche
+
+      const schedule = await getSchedule(db, userId, dayOfWeek);
+
+      if (schedule.length === 0) {
+        // Pas de cours aujourd'hui → on n'envoie pas
+        await markMorningBriefingSent(db, userId);
+        return;
+      }
+
+      // Construire le message
+      const coursesText = schedule
+        .map((item) => `${item.subject} à ${item.start_time}`)
+        .join(', ');
+
+      const profile = getLocalProfile();
+      const childName = profile?.firstName ?? 'toi';
+
+      const message = `Bonjour ${childName} ! 👋 Aujourd'hui tu as : ${coursesText}. Bonne journée ! 💪`;
+
+      const briefingMessage: ChatMessage = {
+        id: `agent-morning-${Date.now()}`,
+        text: message,
+        isUser: false,
+      };
+
+      setMessages((prev) => [...prev, briefingMessage]);
+      saveMessage({
+        id: briefingMessage.id,
+        agentId: 'prof',
+        text: briefingMessage.text,
+        isUser: false,
+      });
+
+      await markMorningBriefingSent(db, userId);
+    } catch (e) {
+      console.warn('[Prof] Erreur sendMorningBriefing:', e);
+    }
+  };
 
   const checkReviewProposal = async () => {
     try {
@@ -165,12 +255,7 @@ export default function HomeScreen() {
         isUser: false,
       };
       setMessages((prev) => [...prev, proposedMessage]);
-      saveMessage({
-        id: proposedMessage.id,
-        agentId: 'prof',
-        text: proposedMessage.text,
-        isUser: false,
-      });
+      saveMessage({ id: proposedMessage.id, agentId: 'prof', text: proposedMessage.text, isUser: false });
     } catch (e) {
       console.warn('[Prof] Erreur proposition révision:', e);
     }
@@ -228,6 +313,20 @@ export default function HomeScreen() {
               room: item.room,
               teacher: item.teacher,
             });
+          }
+
+          // 🆕 Planifier le rappel du matin automatiquement
+          try {
+            const state = await getProfState(profDb, userId);
+            // Si pas encore activé → on l'active par défaut à 7h30
+            if (!state.morning_briefing_enabled) {
+              const result = await scheduleMorningBriefing(profDb, userId, 7, 30);
+              if (result) {
+                console.log('[Prof] Briefing du matin planifié à 7h30');
+              }
+            }
+          } catch (e) {
+            console.warn('[Prof] Impossible de planifier le briefing:', e);
           }
         } catch (e) { console.warn('[Prof] saveScheduleFromImage:', e); }
       } else if (call.name === 'createDailyReminders') {
@@ -371,10 +470,7 @@ export default function HomeScreen() {
 
       if (result.toolCalls && result.toolCalls.length > 0) {
         await handleToolCalls(result.toolCalls, selectedAgent.id);
-
-        // ⚠️ Si Prof n'a rien dit ET qu'aucun tool n'a produit de message, on n'affiche rien
         const finalText = result.reply && result.reply.trim().length > 0 ? result.reply : null;
-
         if (finalText) {
           const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: finalText, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
