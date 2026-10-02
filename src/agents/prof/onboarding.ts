@@ -3,15 +3,18 @@
 
 import * as SQLite from 'expo-sqlite';
 import {
-    PROF_ONBOARDING_PROMPT,
-    deduceLevel,
-    levelLabel,
-    type ProfLevelKey,
+  PROF_ONBOARDING_PROMPT,
+  deduceLevel,
+  levelLabel,
+  type ProfLevelKey,
 } from './config';
 import {
-    createProfProfile,
-    getProfProfile,
-    type ProfProfile,
+  createProfProfile,
+  disableWeather,
+  getProfProfile,
+  incrementWeatherRefusal,
+  setWeatherCity,
+  type ProfProfile,
 } from './database';
 
 /**
@@ -21,11 +24,11 @@ export type OnboardingStep =
   | 'need_name'
   | 'need_age'
   | 'need_grade'
+  | 'need_city'
   | 'done';
 
 /**
- * État temporaire de l'onboarding, gardé en mémoire
- * tant que l'utilisateur n'a pas fini de répondre.
+ * État temporaire de l'onboarding.
  */
 export interface OnboardingState {
   step: OnboardingStep;
@@ -33,10 +36,12 @@ export interface OnboardingState {
   child_age?: number;
   child_grade?: string;
   child_level?: ProfLevelKey;
+  weather_city?: string;
+  city_refused?: boolean;
 }
 
 /**
- * Résultat de la détection : a-t-on besoin de lancer l'onboarding ?
+ * Résultat de la détection.
  */
 export interface OnboardingCheck {
   needsOnboarding: boolean;
@@ -45,8 +50,6 @@ export interface OnboardingCheck {
 
 /**
  * Vérifie si l'utilisateur a déjà un profil enfant.
- * - Si oui → pas d'onboarding
- * - Si non → onboarding à lancer
  */
 export async function checkOnboarding(
   db: SQLite.SQLiteDatabase,
@@ -60,9 +63,7 @@ export async function checkOnboarding(
 }
 
 /**
- * Message d'accueil à afficher quand l'onboarding démarre.
- * (Basé sur PROF_ONBOARDING_PROMPT, mais on met le texte en dur
- * pour ne pas dépendre d'un appel API juste pour un message fixe.)
+ * Message d'accueil.
  */
 export const ONBOARDING_GREETING = `👋 Bonjour ! Je suis Prof, ton professeur particulier.
 
@@ -70,15 +71,37 @@ Avant qu'on commence, j'ai besoin de connaître ton enfant.
 Comment s'appelle-t-il / elle ?`;
 
 /**
- * État initial de l'onboarding.
+ * État initial.
  */
 export function createInitialState(): OnboardingState {
   return { step: 'need_name' };
 }
 
 /**
- * Analyse la réponse de l'utilisateur selon l'étape en cours
- * et met à jour l'état. Retourne la question suivante ou null si terminé.
+ * Détecte si l'utilisateur refuse de donner sa ville.
+ */
+function isCityRefusal(input: string): boolean {
+  const lower = input.toLowerCase().trim();
+  const refusalKeywords = [
+    'non',
+    'pas',
+    'aucune',
+    'plus tard',
+    'je sais pas',
+    'sais pas',
+    'sais-pas',
+    'skip',
+    'passer',
+    'pass',
+    'rien',
+    'aucun',
+    'sans',
+  ];
+  return refusalKeywords.some((k) => lower.includes(k));
+}
+
+/**
+ * Analyse la réponse de l'utilisateur selon l'étape en cours.
  */
 export function processOnboardingAnswer(
   state: OnboardingState,
@@ -95,7 +118,6 @@ export function processOnboardingAnswer(
 
   switch (state.step) {
     case 'need_name': {
-      // On accepte tout sauf les chiffres seuls
       if (/^\d+$/.test(input)) {
         return {
           nextState: state,
@@ -103,13 +125,12 @@ export function processOnboardingAnswer(
           error: "Ça ressemble à un nombre 😅 Tu peux me donner le prénom ?",
         };
       }
-      const nextState: OnboardingState = {
-        ...state,
-        child_name: input,
-        step: 'need_age',
-      };
       return {
-        nextState,
+        nextState: {
+          ...state,
+          child_name: input,
+          step: 'need_age',
+        },
         nextQuestion: `Enchanté ${input} ! 😊 Quel âge a-t-il / elle ?`,
       };
     }
@@ -131,13 +152,12 @@ export function processOnboardingAnswer(
           error: "L'âge doit être compris entre 3 et 25 ans. Tu peux préciser ?",
         };
       }
-      const nextState: OnboardingState = {
-        ...state,
-        child_age: age,
-        step: 'need_grade',
-      };
       return {
-        nextState,
+        nextState: {
+          ...state,
+          child_age: age,
+          step: 'need_grade',
+        },
         nextQuestion: `Super ! En quelle classe est ${state.child_name} ? (CP, CE1, CM2, 6e, 5e, 3e, 2nde, 1ère, Terminale…)`,
       };
     }
@@ -152,15 +172,46 @@ export function processOnboardingAnswer(
             "Je n'ai pas reconnu cette classe. Tu peux me la redonner ? (ex: CM2, 5e, 2nde…)",
         };
       }
-      const nextState: OnboardingState = {
-        ...state,
-        child_grade: input,
-        child_level: level,
-        step: 'done',
-      };
       return {
-        nextState,
-        nextQuestion: `Parfait ! Donc je suis le prof de ${state.child_name}, ${state.child_age} ans, en ${input} (${levelLabel(level)}). On va bien s'entendre 😊`,
+        nextState: {
+          ...state,
+          child_grade: input,
+          child_level: level,
+          step: 'need_city',
+        },
+        nextQuestion:
+          `Parfait ! Donc je suis le prof de ${state.child_name}, ${state.child_age} ans, en ${input} (${levelLabel(level)}).\n\n` +
+          `Et pour finir, dans quelle ville habitez-vous ?\n` +
+          `(Comme ça, je pourrai te donner la météo du matin 🙂)`,
+      };
+    }
+
+    case 'need_city': {
+      // Détection de refus
+      if (isCityRefusal(input)) {
+        return {
+          nextState: {
+            ...state,
+            city_refused: true,
+            step: 'done',
+          },
+          nextQuestion:
+            `Pas de souci ! Tu pourras me le dire plus tard si tu veux 😊\n\n` +
+            `Voilà, tout est prêt ! On peut commencer quand tu veux.`,
+        };
+      }
+
+      // L'utilisateur a donné une ville
+      const city = input.charAt(0).toUpperCase() + input.slice(1);
+      return {
+        nextState: {
+          ...state,
+          weather_city: city,
+          step: 'done',
+        },
+        nextQuestion:
+          `Super ! J'ai bien noté : ${city} 📍\n\n` +
+          `Voilà, tout est prêt ! On peut commencer quand tu veux.`,
       };
     }
 
@@ -170,8 +221,7 @@ export function processOnboardingAnswer(
 }
 
 /**
- * Finalise l'onboarding : crée le profil en base et retourne le profil créé.
- * À appeler une fois que `state.step === 'done'`.
+ * Finalise l'onboarding : crée le profil + enregistre la ville si donnée.
  */
 export async function finalizeOnboarding(
   db: SQLite.SQLiteDatabase,
@@ -188,6 +238,7 @@ export async function finalizeOnboarding(
     return null;
   }
 
+  // 1. Créer le profil (sans ville pour l'instant)
   await createProfProfile(
     db,
     userId,
@@ -197,29 +248,97 @@ export async function finalizeOnboarding(
     state.child_level
   );
 
+  // 2. Si une ville a été donnée → on l'enregistre
+  if (state.weather_city) {
+    await setWeatherCity(db, userId, state.weather_city);
+  } else if (state.city_refused) {
+    // L'utilisateur a refusé → on incrémente le compteur
+    // (mais on n'ira pas jusqu'à 3 ici car c'est la 1ère demande)
+    await incrementWeatherRefusal(db, userId);
+  }
+
   return await getProfProfile(db, userId);
 }
 
 /**
- * Fonction utilitaire pour les cas où le parent remplit le formulaire manuel
- * (onboarding option C : conversation + formulaire de secours).
+ * Utilitaire : formulaire manuel (fallback).
  */
 export async function createProfileFromForm(
   db: SQLite.SQLiteDatabase,
   userId: string,
   childName: string,
   childAge: number,
-  childGrade: string
+  childGrade: string,
+  weatherCity?: string
 ): Promise<ProfProfile | null> {
   const level = deduceLevel(childGrade);
   if (!level) return null;
 
   await createProfProfile(db, userId, childName, childAge, childGrade, level);
+
+  if (weatherCity && weatherCity.trim().length > 0) {
+    const city = weatherCity.trim().charAt(0).toUpperCase() + weatherCity.trim().slice(1);
+    await setWeatherCity(db, userId, city);
+  }
+
   return await getProfProfile(db, userId);
 }
 
 /**
- * Export du prompt système onboarding (au cas où l'agent aurait besoin
- * de continuer la conversation naturellement après les 3 questions).
+ * 🆕 Vérifie si on doit redemander la ville à l'ouverture de Prof.
+ * Conditions :
+ * - L'utilisateur a un profil
+ * - Pas de ville enregistrée
+ * - La météo est activée (pas encore 3 refus)
+ * - On n'a pas déjà demandé aujourd'hui
+ */
+export async function shouldAskWeatherCity(
+  db: SQLite.SQLiteDatabase,
+  userId: string
+): Promise<boolean> {
+  const profile = await getProfProfile(db, userId);
+  if (!profile) return false;
+  if (profile.weather_city) return false; // a déjà une ville
+  if (profile.weather_enabled === 0) return false; // désactivé après 3 refus
+
+  // Vérifier le dernier prompt
+  const state = await db.getFirstAsync<{ last_weather_refusal_prompt_at: number | null }>(
+    `SELECT last_weather_refusal_prompt_at FROM prof_state WHERE user_id = ?`,
+    [userId]
+  );
+
+  if (!state || !state.last_weather_refusal_prompt_at) return true;
+
+  // Vérifier qu'on n'a pas déjà demandé aujourd'hui
+  const lastDate = new Date(state.last_weather_refusal_prompt_at);
+  const today = new Date();
+  const sameDay =
+    lastDate.getDate() === today.getDate() &&
+    lastDate.getMonth() === today.getMonth() &&
+    lastDate.getFullYear() === today.getFullYear();
+
+  return !sameDay;
+}
+
+/**
+ * 🆕 Gère un refus de ville (redemande).
+ * Incrémente le compteur. Si >= 3 → désactive la météo.
+ */
+export async function handleCityRefusal(
+  db: SQLite.SQLiteDatabase,
+  userId: string
+): Promise<{ refusals: number; disabled: boolean }> {
+  const refusals = await incrementWeatherRefusal(db, userId);
+
+  if (refusals >= 3) {
+    await disableWeather(db, userId);
+    return { refusals, disabled: true };
+  }
+
+  return { refusals, disabled: false };
+}
+
+/**
+ * Export du prompt système onboarding.
  */
 export { PROF_ONBOARDING_PROMPT };

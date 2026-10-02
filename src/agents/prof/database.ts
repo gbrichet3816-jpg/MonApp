@@ -12,6 +12,7 @@ export async function openProfDatabase(): Promise<SQLite.SQLiteDatabase> {
 }
 
 async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
+  // 1. Profil de l'enfant
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS prof_profile (
       user_id TEXT PRIMARY KEY,
@@ -21,11 +22,17 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
       child_level TEXT,
       points INTEGER DEFAULT 0,
       onboarded INTEGER DEFAULT 0,
+      weather_city TEXT,
+      weather_cache_json TEXT,
+      weather_cache_at INTEGER,
+      weather_city_refusals INTEGER DEFAULT 0,
+      weather_enabled INTEGER DEFAULT 1,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
   `);
 
+  // 2. Historique des messages
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS prof_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,6 +45,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
       ON prof_messages(user_id, created_at);
   `);
 
+  // 3. Emploi du temps
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS prof_schedule (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,6 +62,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
       ON prof_schedule(user_id, day_of_week);
   `);
 
+  // 4. Événements
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS prof_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,6 +78,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
       ON prof_events(user_id, due_date);
   `);
 
+  // 5. Notions travaillées
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS prof_topics (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,6 +98,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
       ON prof_topics(user_id, next_review_at);
   `);
 
+  // 6. État général
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS prof_state (
       user_id TEXT PRIMARY KEY,
@@ -102,12 +113,18 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
       evening_briefing_minute INTEGER DEFAULT 30,
       evening_briefing_enabled INTEGER DEFAULT 0,
       evening_briefing_notification_id TEXT,
+      last_weather_refusal_prompt_at INTEGER,
       updated_at INTEGER NOT NULL
     );
   `);
 
-  // Migrations (si la table existe déjà avec une ancienne version)
+  // Migrations
   const migrations = [
+    `ALTER TABLE prof_profile ADD COLUMN weather_city TEXT;`,
+    `ALTER TABLE prof_profile ADD COLUMN weather_cache_json TEXT;`,
+    `ALTER TABLE prof_profile ADD COLUMN weather_cache_at INTEGER;`,
+    `ALTER TABLE prof_profile ADD COLUMN weather_city_refusals INTEGER DEFAULT 0;`,
+    `ALTER TABLE prof_profile ADD COLUMN weather_enabled INTEGER DEFAULT 1;`,
     `ALTER TABLE prof_state ADD COLUMN morning_briefing_hour INTEGER DEFAULT 7;`,
     `ALTER TABLE prof_state ADD COLUMN morning_briefing_minute INTEGER DEFAULT 30;`,
     `ALTER TABLE prof_state ADD COLUMN morning_briefing_enabled INTEGER DEFAULT 0;`,
@@ -117,13 +134,14 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
     `ALTER TABLE prof_state ADD COLUMN evening_briefing_minute INTEGER DEFAULT 30;`,
     `ALTER TABLE prof_state ADD COLUMN evening_briefing_enabled INTEGER DEFAULT 0;`,
     `ALTER TABLE prof_state ADD COLUMN evening_briefing_notification_id TEXT;`,
+    `ALTER TABLE prof_state ADD COLUMN last_weather_refusal_prompt_at INTEGER;`,
   ];
 
   for (const sql of migrations) {
     try {
       await db.execAsync(sql);
     } catch (e) {
-      // Colonne existe déjà : on ignore
+      // Colonne existe déjà
     }
   }
 }
@@ -140,6 +158,11 @@ export interface ProfProfile {
   child_level: string;
   points: number;
   onboarded: number;
+  weather_city: string | null;
+  weather_cache_json: string | null;
+  weather_cache_at: number | null;
+  weather_city_refusals: number;
+  weather_enabled: number;
   created_at: number;
   updated_at: number;
 }
@@ -153,13 +176,15 @@ export async function createProfProfile(db: SQLite.SQLiteDatabase, userId: strin
   const now = Date.now();
   await db.runAsync(
     `INSERT OR REPLACE INTO prof_profile
-     (user_id, child_name, child_age, child_grade, child_level, points, onboarded, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)`,
+     (user_id, child_name, child_age, child_grade, child_level, points, onboarded,
+      weather_city, weather_cache_json, weather_cache_at, weather_city_refusals, weather_enabled,
+      created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 0, 1, NULL, NULL, NULL, 0, 1, ?, ?)`,
     [userId, childName, childAge, childGrade, childLevel, now, now]
   );
 }
 
-export async function updateProfProfile(db: SQLite.SQLiteDatabase, userId: string, updates: Partial<Pick<ProfProfile, 'child_name' | 'child_age' | 'child_grade' | 'child_level' | 'points'>>): Promise<void> {
+export async function updateProfProfile(db: SQLite.SQLiteDatabase, userId: string, updates: Partial<Pick<ProfProfile, 'child_name' | 'child_age' | 'child_grade' | 'child_level' | 'points' | 'weather_city' | 'weather_cache_json' | 'weather_cache_at' | 'weather_city_refusals' | 'weather_enabled'>>): Promise<void> {
   const fields: string[] = [];
   const values: any[] = [];
 
@@ -168,6 +193,11 @@ export async function updateProfProfile(db: SQLite.SQLiteDatabase, userId: strin
   if (updates.child_grade !== undefined) { fields.push('child_grade = ?'); values.push(updates.child_grade); }
   if (updates.child_level !== undefined) { fields.push('child_level = ?'); values.push(updates.child_level); }
   if (updates.points !== undefined) { fields.push('points = ?'); values.push(updates.points); }
+  if (updates.weather_city !== undefined) { fields.push('weather_city = ?'); values.push(updates.weather_city); }
+  if (updates.weather_cache_json !== undefined) { fields.push('weather_cache_json = ?'); values.push(updates.weather_cache_json); }
+  if (updates.weather_cache_at !== undefined) { fields.push('weather_cache_at = ?'); values.push(updates.weather_cache_at); }
+  if (updates.weather_city_refusals !== undefined) { fields.push('weather_city_refusals = ?'); values.push(updates.weather_city_refusals); }
+  if (updates.weather_enabled !== undefined) { fields.push('weather_enabled = ?'); values.push(updates.weather_enabled); }
 
   if (fields.length === 0) return;
   fields.push('updated_at = ?');
@@ -178,6 +208,81 @@ export async function updateProfProfile(db: SQLite.SQLiteDatabase, userId: strin
 
 export async function addProfPoints(db: SQLite.SQLiteDatabase, userId: string, delta: number): Promise<void> {
   await db.runAsync(`UPDATE prof_profile SET points = points + ?, updated_at = ? WHERE user_id = ?`, [delta, Date.now(), userId]);
+}
+
+// ============================================================
+// 🌤️ MÉTÉO
+// ============================================================
+
+/**
+ * Enregistre la ville de l'enfant (ou la change).
+ * Remet aussi le compteur de refus à 0 et réactive la météo.
+ */
+export async function setWeatherCity(db: SQLite.SQLiteDatabase, userId: string, city: string): Promise<void> {
+  const now = Date.now();
+  await db.runAsync(
+    `UPDATE prof_profile
+     SET weather_city = ?,
+         weather_cache_json = NULL,
+         weather_cache_at = NULL,
+         weather_city_refusals = 0,
+         weather_enabled = 1,
+         updated_at = ?
+     WHERE user_id = ?`,
+    [city, now, userId]
+  );
+}
+
+/**
+ * Enregistre la météo en cache (durée 1h côté code).
+ */
+export async function cacheWeather(db: SQLite.SQLiteDatabase, userId: string, json: string): Promise<void> {
+  const now = Date.now();
+  await db.runAsync(
+    `UPDATE prof_profile
+     SET weather_cache_json = ?,
+         weather_cache_at = ?,
+         updated_at = ?
+     WHERE user_id = ?`,
+    [json, now, now, userId]
+  );
+}
+
+/**
+ * Récupère la météo en cache si elle a moins de 1 heure.
+ * Retourne null sinon.
+ */
+export async function getCachedWeather(db: SQLite.SQLiteDatabase, userId: string): Promise<string | null> {
+  const profile = await getProfProfile(db, userId);
+  if (!profile || !profile.weather_cache_json || !profile.weather_cache_at) return null;
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  if (profile.weather_cache_at < oneHourAgo) return null;
+  return profile.weather_cache_json;
+}
+
+/**
+ * Incrémente le compteur de refus ville.
+ * Retourne le nouveau compteur.
+ */
+export async function incrementWeatherRefusal(db: SQLite.SQLiteDatabase, userId: string): Promise<number> {
+  const profile = await getProfProfile(db, userId);
+  if (!profile) return 0;
+  const newCount = (profile.weather_city_refusals || 0) + 1;
+  await db.runAsync(
+    `UPDATE prof_profile SET weather_city_refusals = ?, updated_at = ? WHERE user_id = ?`,
+    [newCount, Date.now(), userId]
+  );
+  return newCount;
+}
+
+/**
+ * Désactive la météo (après 3 refus).
+ */
+export async function disableWeather(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
+  await db.runAsync(
+    `UPDATE prof_profile SET weather_enabled = 0, updated_at = ? WHERE user_id = ?`,
+    [Date.now(), userId]
+  );
 }
 
 // ============================================================
@@ -264,20 +369,13 @@ export async function getUpcomingEvents(db: SQLite.SQLiteDatabase, userId: strin
   return await db.getAllAsync<ProfEvent>(`SELECT * FROM prof_events WHERE user_id = ? AND done = 0 AND due_date >= ? ORDER BY due_date ASC LIMIT ?`, [userId, Date.now(), limit]);
 }
 
-/**
- * 🆕 Récupère les événements prévus pour une date précise (par défaut demain).
- */
 export async function getEventsForDate(db: SQLite.SQLiteDatabase, userId: string, date: Date): Promise<ProfEvent[]> {
   const startOfDay = new Date(date);
   startOfDay.setHours(0, 0, 0, 0);
-
   const endOfDay = new Date(date);
   endOfDay.setHours(23, 59, 59, 999);
-
   return await db.getAllAsync<ProfEvent>(
-    `SELECT * FROM prof_events
-     WHERE user_id = ? AND done = 0 AND due_date BETWEEN ? AND ?
-     ORDER BY due_date ASC`,
+    `SELECT * FROM prof_events WHERE user_id = ? AND done = 0 AND due_date BETWEEN ? AND ? ORDER BY due_date ASC`,
     [userId, startOfDay.getTime(), endOfDay.getTime()]
   );
 }
@@ -355,15 +453,9 @@ export async function getTopicsToReview(db: SQLite.SQLiteDatabase, userId: strin
   return await db.getAllAsync<ProfTopic>(`SELECT * FROM prof_topics WHERE user_id = ? AND next_review_at <= ? AND status != 'acquired' ORDER BY next_review_at ASC LIMIT 5`, [userId, Date.now()]);
 }
 
-/**
- * 🆕 Récupère uniquement les notions "fragiles" (pour le rappel du soir).
- */
 export async function getFragileTopics(db: SQLite.SQLiteDatabase, userId: string): Promise<ProfTopic[]> {
   return await db.getAllAsync<ProfTopic>(
-    `SELECT * FROM prof_topics
-     WHERE user_id = ? AND status = 'fragile'
-     ORDER BY last_seen ASC
-     LIMIT 3`,
+    `SELECT * FROM prof_topics WHERE user_id = ? AND status = 'fragile' ORDER BY last_seen ASC LIMIT 3`,
     [userId]
   );
 }
@@ -389,6 +481,7 @@ export interface ProfState {
   evening_briefing_minute: number;
   evening_briefing_enabled: number;
   evening_briefing_notification_id: string | null;
+  last_weather_refusal_prompt_at: number | null;
   updated_at: number;
 }
 
@@ -397,10 +490,7 @@ export async function getProfState(db: SQLite.SQLiteDatabase, userId: string): P
 
   if (!state) {
     const now = Date.now();
-    await db.runAsync(
-      `INSERT INTO prof_state (user_id, updated_at) VALUES (?, ?)`,
-      [userId, now]
-    );
+    await db.runAsync(`INSERT INTO prof_state (user_id, updated_at) VALUES (?, ?)`, [userId, now]);
     state = {
       user_id: userId,
       last_review_offer_at: null,
@@ -414,6 +504,7 @@ export async function getProfState(db: SQLite.SQLiteDatabase, userId: string): P
       evening_briefing_minute: 30,
       evening_briefing_enabled: 0,
       evening_briefing_notification_id: null,
+      last_weather_refusal_prompt_at: null,
       updated_at: now,
     };
   }
@@ -480,10 +571,6 @@ export async function disableMorningBriefing(db: SQLite.SQLiteDatabase, userId: 
   );
 }
 
-// ============================================================
-// 🆕 RAPPEL DU SOIR
-// ============================================================
-
 export async function markEveningBriefingSent(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   const now = Date.now();
   await db.runAsync(
@@ -531,5 +618,14 @@ export async function disableEveningBriefing(db: SQLite.SQLiteDatabase, userId: 
   await db.runAsync(
     `UPDATE prof_state SET evening_briefing_enabled = 0, evening_briefing_notification_id = NULL, updated_at = ? WHERE user_id = ?`,
     [Date.now(), userId]
+  );
+}
+
+export async function markWeatherRefusalPrompted(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
+  const now = Date.now();
+  await db.runAsync(
+    `INSERT INTO prof_state (user_id, last_weather_refusal_prompt_at, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET last_weather_refusal_prompt_at = excluded.last_weather_refusal_prompt_at, updated_at = excluded.updated_at`,
+    [userId, now, now]
   );
 }
