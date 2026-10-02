@@ -15,6 +15,11 @@ export type ImportedFile = {
   title: string;
 };
 
+/**
+ * Action choisie par l'utilisateur quand il envoie un fichier.
+ */
+export type FileAction = 'agent' | 'save' | 'agent+save';
+
 type Props = {
   visible: boolean;
   onClose: () => void;

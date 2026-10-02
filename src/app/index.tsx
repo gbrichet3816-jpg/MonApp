@@ -3,6 +3,8 @@ import { Alert, KeyboardAvoidingView, Platform, StyleSheet } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AGENTS } from '@/agents';
+import { getAllTopics, openProfDatabase, saveTopicProgress } from '@/agents/prof/database';
+import { formatTopicsForPrompt, isBilanRequest } from '@/agents/prof/helpers';
 import {
   scheduleMultipleDailyReminders,
   scheduleMultipleOneTimeReminders,
@@ -137,11 +139,6 @@ export default function HomeScreen() {
     });
   };
 
-  /**
-   * Exécute les tool calls et retourne les messages à afficher.
-   * ⚠️ MODIFIÉ : les messages de confirmation ne sont plus poussés ici.
-   * On les intègre dans la réponse finale de l'IA (dans handleSend).
-   */
   const handleToolCalls = async (
     toolCalls: ToolCall[],
     agentId: string,
@@ -159,8 +156,22 @@ export default function HomeScreen() {
           title: args.title,
           content: args.content,
         });
-        // ⚠️ On NE pousse PLUS de message ici.
-        // L'IA va confirmer elle-même dans sa réponse (result.reply).
+      } else if (call.name === 'saveTopicProgress') {
+        // 🆕 Enregistrement d'une notion travaillée (Agent Prof)
+        try {
+          const profDb = await openProfDatabase();
+          const profile = getLocalProfile();
+          const userId = profile?.code ?? 'default';
+          await saveTopicProgress(
+            profDb,
+            userId,
+            args.subject,
+            args.topic,
+            args.result,
+          );
+        } catch (e) {
+          console.warn('[Prof] Impossible de sauvegarder la notion:', e);
+        }
       } else if (call.name === 'createDailyReminders') {
         const medicationName = args.medicationName;
         const times: string[] = args.times || [];
@@ -350,6 +361,21 @@ export default function HomeScreen() {
     setIsLoading(true);
 
     try {
+      // Injection "bilan" pour l'Agent Prof
+      let systemPrompt = selectedAgent.systemPrompt;
+      if (selectedAgent.id === 'prof' && isBilanRequest(text)) {
+        try {
+          const profDb = await openProfDatabase();
+          const profile = getLocalProfile();
+          const userId = profile?.code ?? 'default';
+          const topics = await getAllTopics(profDb, userId);
+          const dataText = formatTopicsForPrompt(topics);
+          systemPrompt = `${systemPrompt}\n\n${dataText}`;
+        } catch (e) {
+          console.warn('[Prof] Impossible de charger les données de progression:', e);
+        }
+      }
+
       const apiMessages: ApiMessage[] = newMessages.map((m) => ({
         role: m.isUser ? 'user' : 'assistant',
         content: m.text,
@@ -357,7 +383,7 @@ export default function HomeScreen() {
 
       const result = await sendMessageToAgent({
         messages: apiMessages,
-        agentSystemPrompt: selectedAgent.systemPrompt,
+        agentSystemPrompt: systemPrompt,
         enableTools: (selectedAgent as any).enableTools === true,
         agentId: selectedAgent.id,
       });
@@ -365,12 +391,8 @@ export default function HomeScreen() {
       if (!isMounted.current) return;
 
       if (result.toolCalls && result.toolCalls.length > 0) {
-        // On exécute les tools (sauvegarde en base) SANS afficher de message auto
         await handleToolCalls(result.toolCalls, selectedAgent.id);
 
-        // Un seul message final :
-        // - Si l'IA a répondu (result.reply) → on affiche SA réponse
-        // - Si l'IA n'a rien dit → on affiche un message de confirmation générique
         const finalText = result.reply && result.reply.trim().length > 0
           ? result.reply
           : "C'est fait !";
@@ -427,7 +449,6 @@ export default function HomeScreen() {
     setFileModalVisible(false);
     if (!pendingFile || !selectedAgent) return;
 
-    // Cas 1 : Enregistrer seulement
     if (action === 'save') {
       const docId = `doc-file-${Date.now()}`;
       const savedPath = await saveFileToDocuments(pendingFile.uri, pendingFile.fileName);
@@ -446,7 +467,6 @@ export default function HomeScreen() {
       return;
     }
 
-    // Cas 2 : Envoyer + Enregistrer
     if (action === 'agent+save') {
       const docId = `doc-file-${Date.now()}`;
       const savedPath = await saveFileToDocuments(pendingFile.uri, pendingFile.fileName);
@@ -461,7 +481,6 @@ export default function HomeScreen() {
       });
     }
 
-    // Cas 3 (défaut) : Envoyer à l'agent
     const isImage = pendingFile.type === 'image';
     const isPdf = pendingFile.type === 'pdf';
     const isText = pendingFile.type === 'text';
@@ -599,7 +618,6 @@ export default function HomeScreen() {
     setPhotoModalVisible(false);
     if (!pendingPhoto || !selectedAgent) return;
 
-    // Cas 1 : Enregistrer seulement
     if (action === 'save') {
       const docId = `doc-photo-${Date.now()}`;
       const fileName = `photo_${Date.now()}.jpg`;
@@ -619,7 +637,6 @@ export default function HomeScreen() {
       return;
     }
 
-    // Cas 2 : Envoyer + Enregistrer
     if (action === 'agent+save') {
       const docId = `doc-photo-${Date.now()}`;
       const fileName = `photo_${Date.now()}.jpg`;
@@ -635,7 +652,6 @@ export default function HomeScreen() {
       });
     }
 
-    // Cas 3 (défaut) : Envoyer à l'agent
     const userText = message || 'Analyse cette image';
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
