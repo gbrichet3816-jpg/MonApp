@@ -57,15 +57,34 @@ export default function Message({
   // 🆕 Flag de fin de quiz
   const [quizFinished, setQuizFinished] = useState(false);
 
+  // 🆕 Ref pour accumuler la transcription sans re-render
+  const transcriptRef = useRef('');
+  // 🆕 Flag pour éviter l'écrasement pendant l'écoute
+  const isListeningRef = useRef(false);
+
   const inputRef = useRef<TextInput>(null);
 
   const { isListening, error, start, stop, cancel } = useSpeechRecognition({
     onResult: (transcript) => {
+      // 🆕 On stocke dans le ref SANS re-render
       if (transcript && transcript.trim().length > 0) {
-        setUserAnswer(transcript);
+        transcriptRef.current = transcript;
       }
     },
   });
+
+  // 🆕 Synchroniser userAnswer quand l'écoute se termine
+  useEffect(() => {
+    if (isListening) {
+      isListeningRef.current = true;
+    } else if (isListeningRef.current) {
+      // On vient de finir d'écouter
+      isListeningRef.current = false;
+      if (transcriptRef.current.trim()) {
+        setUserAnswer(transcriptRef.current);
+      }
+    }
+  }, [isListening]);
 
   const sentences = isDictation
     ? text
@@ -149,8 +168,9 @@ export default function Message({
 
   const handleMicStart = async () => {
     try {
-      setShowMicMode(true);
+      transcriptRef.current = '';
       setUserAnswer('');
+      setShowMicMode(true);
       await start();
     } catch (e) {
       setShowMicMode(false);
@@ -165,6 +185,7 @@ export default function Message({
     try {
       cancel();
     } catch {}
+    transcriptRef.current = '';
     setShowMicMode(false);
     setUserAnswer('');
   };
@@ -193,7 +214,6 @@ export default function Message({
       const isCorrect =
         normalizeAnswer(answer) === normalizeAnswer(currentQuestion.answer);
 
-      // 🆕 Incrémenter le compteur si correct
       if (isCorrect) {
         setCorrectCount((prev) => prev + 1);
       }
@@ -216,20 +236,23 @@ export default function Message({
         stop();
       } catch {}
       setShowMicMode(false);
-      if (userAnswer.trim()) {
-        setTimeout(() => validateCurrentAnswer(userAnswer), 50);
+      // Utiliser le ref comme source de vérité
+      const finalAnswer = transcriptRef.current || userAnswer;
+      if (finalAnswer.trim()) {
+        setUserAnswer(finalAnswer);
+        setTimeout(() => validateCurrentAnswer(finalAnswer), 50);
       }
     };
 
     const handleNextQuestion = () => {
       stopSpeaking();
+      transcriptRef.current = '';
       setUserAnswer('');
       setFeedback(null);
       setShowMicMode(false);
       setCurrentIndex(currentIndex + 1);
     };
 
-    // 🆕 Terminer le quiz
     const handleFinishQuiz = () => {
       stopSpeaking();
       setQuizFinished(true);
@@ -237,7 +260,7 @@ export default function Message({
       onQuizAnswer?.(-1, `FIN:${finalScore}/${totalQuestions}`);
     };
 
-    // 🆕 Affichage "Quiz terminé"
+    // Affichage "Quiz terminé"
     if (quizFinished) {
       return (
         <View style={[styles.container, styles.agentContainer]}>
@@ -358,8 +381,10 @@ export default function Message({
                   {isListening ? 'Je t\'écoute…' : 'Enregistrement terminé'}
                 </Text>
               </View>
-              {userAnswer ? (
-                <Text style={styles.quizMicTranscript}>« {userAnswer} »</Text>
+              {userAnswer || transcriptRef.current ? (
+                <Text style={styles.quizMicTranscript}>
+                  « {userAnswer || transcriptRef.current} »
+                </Text>
               ) : (
                 <Text style={styles.quizMicHint}>
                   {isListening ? 'Parle maintenant' : 'Aucune parole détectée'}
@@ -376,7 +401,7 @@ export default function Message({
                 <TouchableOpacity
                   style={[styles.quizMicButton, styles.quizMicButtonValidate]}
                   onPress={handleMicSend}
-                  disabled={!userAnswer.trim()}
+                  disabled={!userAnswer.trim() && !transcriptRef.current.trim()}
                 >
                   <Ionicons name="send" size={20} color={Colors.light.background} />
                   <Text style={styles.quizMicButtonText}>Envoyer</Text>
