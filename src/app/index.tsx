@@ -425,7 +425,6 @@ export default function HomeScreen() {
       const profile = getLocalProfile();
       const userId = profile?.code ?? 'default';
 
-      // QUIZ
       if (call.name === 'startQuiz') {
         const title = args.title || 'Quiz';
         const questions = args.questions || [];
@@ -433,7 +432,6 @@ export default function HomeScreen() {
         return `__QUIZ__:${JSON.stringify({ title, questions })}`;
       }
 
-      // DICTÉE
       if (call.name === 'startDictation') {
         const sentences: string[] = args.sentences || [];
         if (!sentences.length) return 'Aucune phrase fournie.';
@@ -844,7 +842,6 @@ export default function HomeScreen() {
 
         console.log(`📥 Réponse boucle #${loopCount}:`, newResult.reply?.substring(0, 50));
 
-        // Détection QUIZ
         if (toolResult.startsWith('__QUIZ__:')) {
           const jsonStr = toolResult.replace('__QUIZ__:', '');
           let quizData: { title: string; questions: any[] } | null = null;
@@ -877,7 +874,6 @@ export default function HomeScreen() {
           break;
         }
 
-        // Détection DICTÉE
         if (toolResult.startsWith('__DICTATION__:')) {
           const sentences = toolResult.replace('__DICTATION__:', '');
           const dictationMessage: ChatMessage = {
@@ -1002,6 +998,14 @@ export default function HomeScreen() {
         ];
       } else if (isPdf && pendingFile.base64) {
         const extractResult = await extractPdfText(pendingFile.base64);
+        // 🆕 LOG DIAGNOSTIC PDF
+        console.log('📄 PDF extraction:', {
+          success: extractResult.success,
+          textLength: extractResult.text?.length || 0,
+          pages: extractResult.pages,
+          error: extractResult.error,
+          preview: extractResult.text?.substring(0, 300),
+        });
         if (extractResult.success && extractResult.text) {
           const pdfText = extractResult.text.slice(0, 15000);
           content = `${userText}\n\n--- Contenu du PDF "${pendingFile.fileName}" (${extractResult.pages} pages) ---\n\n${pdfText}`;
@@ -1335,20 +1339,17 @@ export default function HomeScreen() {
   ) => {
     console.log('[Quiz] Réponse:', { messageId, questionIndex, userAnswer });
 
-    // Détection de fin de quiz (format "FIN:x/y")
     if (questionIndex === -1 && userAnswer.startsWith('FIN:')) {
       const scorePart = userAnswer.replace('FIN:', '');
       const [correct, total] = scorePart.split('/');
 
       console.log(`🎉 Quiz terminé : ${correct}/${total}`);
 
-      // Trouver le titre du quiz
       const quizMsg = messages.find((m) => m.id === messageId);
       const quizTitle = quizMsg?.quizTitle || 'Quiz';
 
       if (!selectedAgent) return;
 
-      // Envoyer un message à Prof pour féliciter
       const congratsPrompt = `[SYSTEME] L'enfant vient de terminer le quiz "${quizTitle}" avec un score de ${correct}/${total}. Félicite-le chaleureusement, commente son score (sans juger), et propose-lui soit un nouveau quiz sur un autre thème, soit une autre activité (dictée, révision, exercice). Sois bref et chaleureux.`;
 
       try {
