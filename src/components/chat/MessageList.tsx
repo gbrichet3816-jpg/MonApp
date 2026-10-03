@@ -3,21 +3,25 @@ import { FlatList, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
 
-import Message from './Message';
+import Message, { type QuizQuestion } from './Message';
 
 export type ChatMessage = {
   id: string;
   text: string;
   isUser: boolean;
-  isDictation?: boolean;  // 🆕
+  isDictation?: boolean;
+  isQuiz?: boolean;
+  quizTitle?: string;
+  quizQuestions?: QuizQuestion[];
 };
 
 type Props = {
   messages: ChatMessage[];
   emptyText: string;
+  onQuizAnswer?: (messageId: string, questionIndex: number, userAnswer: string) => void;
 };
 
-export default function MessageList({ messages, emptyText }: Props) {
+export default function MessageList({ messages, emptyText, onQuizAnswer }: Props) {
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
   useEffect(() => {
@@ -46,7 +50,13 @@ export default function MessageList({ messages, emptyText }: Props) {
           text={item.text}
           isUser={item.isUser}
           isDictation={item.isDictation}
-          autoSpeak={item.isDictation}  // 🆕 Lecture auto pour les dictées
+          autoSpeak={item.isDictation}
+          isQuiz={item.isQuiz}
+          quizTitle={item.quizTitle}
+          quizQuestions={item.quizQuestions}
+          onQuizAnswer={(questionIndex, userAnswer) => {
+            onQuizAnswer?.(item.id, questionIndex, userAnswer);
+          }}
         />
       )}
       contentContainerStyle={styles.listContent}

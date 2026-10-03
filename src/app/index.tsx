@@ -425,11 +425,18 @@ export default function HomeScreen() {
       const profile = getLocalProfile();
       const userId = profile?.code ?? 'default';
 
-      // 🆕 DICTÉE (multi-phrases)
+      // QUIZ
+      if (call.name === 'startQuiz') {
+        const title = args.title || 'Quiz';
+        const questions = args.questions || [];
+        if (!questions.length) return 'Aucune question fournie.';
+        return `__QUIZ__:${JSON.stringify({ title, questions })}`;
+      }
+
+      // DICTÉE
       if (call.name === 'startDictation') {
         const sentences: string[] = args.sentences || [];
         if (!sentences.length) return 'Aucune phrase fournie.';
-        // On renvoie un marqueur avec les phrases séparées par \n
         return `__DICTATION__:${sentences.join('\n')}`;
       }
 
@@ -811,7 +818,6 @@ export default function HomeScreen() {
 
       if (!isMounted.current) return;
 
-      // BOUCLE DE TOOL CALLING
       let currentResult = result;
       let loopCount = 0;
       let messageAlreadyDisplayed = false;
@@ -838,7 +844,40 @@ export default function HomeScreen() {
 
         console.log(`📥 Réponse boucle #${loopCount}:`, newResult.reply?.substring(0, 50));
 
-        // 🆕 Détection de dictée
+        // Détection QUIZ
+        if (toolResult.startsWith('__QUIZ__:')) {
+          const jsonStr = toolResult.replace('__QUIZ__:', '');
+          let quizData: { title: string; questions: any[] } | null = null;
+          try {
+            quizData = JSON.parse(jsonStr);
+          } catch (e) {
+            console.warn('[Prof] Erreur parsing quiz:', e);
+          }
+
+          if (quizData) {
+            const quizMessage: ChatMessage = {
+              id: `agent-quiz-${Date.now()}`,
+              text: '',
+              isUser: false,
+              isQuiz: true,
+              quizTitle: quizData.title,
+              quizQuestions: quizData.questions,
+            };
+            setMessages((prev) => [...prev, quizMessage]);
+            saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
+            messageAlreadyDisplayed = true;
+          }
+
+          if (newResult.reply && newResult.reply.trim().length > 0) {
+            const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
+            setMessages((prev) => [...prev, finalMessage]);
+            saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
+          }
+          currentResult = newResult;
+          break;
+        }
+
+        // Détection DICTÉE
         if (toolResult.startsWith('__DICTATION__:')) {
           const sentences = toolResult.replace('__DICTATION__:', '');
           const dictationMessage: ChatMessage = {
@@ -851,7 +890,6 @@ export default function HomeScreen() {
           saveMessage({ id: dictationMessage.id, agentId: selectedAgent.id, text: dictationMessage.text, isUser: false });
           messageAlreadyDisplayed = true;
 
-          // Si Prof a aussi écrit un texte, on l'affiche après
           if (newResult.reply && newResult.reply.trim().length > 0) {
             const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
             setMessages((prev) => [...prev, finalMessage]);
@@ -1016,6 +1054,31 @@ export default function HomeScreen() {
           agentId: selectedAgent.id,
         });
 
+        if (toolResult.startsWith('__QUIZ__:')) {
+          const jsonStr = toolResult.replace('__QUIZ__:', '');
+          try {
+            const quizData = JSON.parse(jsonStr);
+            const quizMessage: ChatMessage = {
+              id: `agent-quiz-${Date.now()}`,
+              text: '',
+              isUser: false,
+              isQuiz: true,
+              quizTitle: quizData.title,
+              quizQuestions: quizData.questions,
+            };
+            setMessages((prev) => [...prev, quizMessage]);
+            saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
+            messageAlreadyDisplayed = true;
+          } catch (e) { console.warn('[Prof] Parsing quiz:', e); }
+          if (newResult.reply && newResult.reply.trim().length > 0) {
+            const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
+            setMessages((prev) => [...prev, finalMessage]);
+            saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
+          }
+          currentResult = newResult;
+          break;
+        }
+
         if (toolResult.startsWith('__DICTATION__:')) {
           const sentences = toolResult.replace('__DICTATION__:', '');
           const dictationMessage: ChatMessage = {
@@ -1168,6 +1231,31 @@ export default function HomeScreen() {
           agentId: selectedAgent.id,
         });
 
+        if (toolResult.startsWith('__QUIZ__:')) {
+          const jsonStr = toolResult.replace('__QUIZ__:', '');
+          try {
+            const quizData = JSON.parse(jsonStr);
+            const quizMessage: ChatMessage = {
+              id: `agent-quiz-${Date.now()}`,
+              text: '',
+              isUser: false,
+              isQuiz: true,
+              quizTitle: quizData.title,
+              quizQuestions: quizData.questions,
+            };
+            setMessages((prev) => [...prev, quizMessage]);
+            saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
+            messageAlreadyDisplayed = true;
+          } catch (e) { console.warn('[Prof] Parsing quiz:', e); }
+          if (newResult.reply && newResult.reply.trim().length > 0) {
+            const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
+            setMessages((prev) => [...prev, finalMessage]);
+            saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
+          }
+          currentResult = newResult;
+          break;
+        }
+
         if (toolResult.startsWith('__DICTATION__:')) {
           const sentences = toolResult.replace('__DICTATION__:', '');
           const dictationMessage: ChatMessage = {
@@ -1237,6 +1325,63 @@ export default function HomeScreen() {
   };
 
   // ============================================================
+  // TRAITEMENT DES RÉPONSES AU QUIZ
+  // ============================================================
+
+  const handleQuizAnswer = async (
+    messageId: string,
+    questionIndex: number,
+    userAnswer: string
+  ) => {
+    console.log('[Quiz] Réponse:', { messageId, questionIndex, userAnswer });
+
+    // Détection de fin de quiz (format "FIN:x/y")
+    if (questionIndex === -1 && userAnswer.startsWith('FIN:')) {
+      const scorePart = userAnswer.replace('FIN:', '');
+      const [correct, total] = scorePart.split('/');
+
+      console.log(`🎉 Quiz terminé : ${correct}/${total}`);
+
+      // Trouver le titre du quiz
+      const quizMsg = messages.find((m) => m.id === messageId);
+      const quizTitle = quizMsg?.quizTitle || 'Quiz';
+
+      if (!selectedAgent) return;
+
+      // Envoyer un message à Prof pour féliciter
+      const congratsPrompt = `[SYSTEME] L'enfant vient de terminer le quiz "${quizTitle}" avec un score de ${correct}/${total}. Félicite-le chaleureusement, commente son score (sans juger), et propose-lui soit un nouveau quiz sur un autre thème, soit une autre activité (dictée, révision, exercice). Sois bref et chaleureux.`;
+
+      try {
+        const result = await sendMessageToAgent({
+          messages: [{ role: 'user', content: congratsPrompt }],
+          agentSystemPrompt: selectedAgent.systemPrompt,
+          enableTools: false,
+          agentId: selectedAgent.id,
+        });
+
+        if (!isMounted.current) return;
+
+        if (result.reply && result.reply.trim().length > 0) {
+          const finalMessage: ChatMessage = {
+            id: `agent-quiz-end-${Date.now()}`,
+            text: result.reply,
+            isUser: false,
+          };
+          setMessages((prev) => [...prev, finalMessage]);
+          saveMessage({
+            id: finalMessage.id,
+            agentId: selectedAgent.id,
+            text: finalMessage.text,
+            isUser: false,
+          });
+        }
+      } catch (e) {
+        console.warn('[Quiz] Erreur félicitations:', e);
+      }
+    }
+  };
+
+  // ============================================================
   // RENDU
   // ============================================================
 
@@ -1257,7 +1402,11 @@ export default function HomeScreen() {
         onOpenSettings={() => setSettingsVisible(true)}
       />
       <KeyboardAvoidingView style={styles.body} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-        <MessageList messages={messages} emptyText={emptyText} />
+        <MessageList
+          messages={messages}
+          emptyText={emptyText}
+          onQuizAnswer={handleQuizAnswer}
+        />
         <InputBar
           onSend={handleSend}
           onFilePicked={handleFilePicked}

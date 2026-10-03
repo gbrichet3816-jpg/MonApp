@@ -1,23 +1,72 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
 import { speakText, speakTextSlow, stopSpeaking } from '@/config/speech';
 import { Colors, Spacing } from '@/constants/theme';
+import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
+
+export type QuizQuestion = {
+  question: string;
+  answer: string;
+};
 
 type Props = {
   text: string;
   isUser: boolean;
   autoSpeak?: boolean;
   isDictation?: boolean;
+  isQuiz?: boolean;
+  quizTitle?: string;
+  quizQuestions?: QuizQuestion[];
+  onQuizAnswer?: (questionIndex: number, userAnswer: string) => void;
 };
 
-export default function Message({ text, isUser, autoSpeak = false, isDictation = false }: Props) {
+export default function Message({
+  text,
+  isUser,
+  autoSpeak = false,
+  isDictation = false,
+  isQuiz = false,
+  quizTitle,
+  quizQuestions,
+  onQuizAnswer,
+}: Props) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRevealed, setIsRevealed] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
 
-  // 🆕 Découper le texte en phrases (par \n ou séparateur explicite)
+  const [userAnswer, setUserAnswer] = useState('');
+  const [isValidating, setIsValidating] = useState(false);
+  const [feedback, setFeedback] = useState<{
+    correct: boolean;
+    expected: string;
+  } | null>(null);
+  const [showMicMode, setShowMicMode] = useState(false);
+
+  // 🆕 Compteur interne du score
+  const [correctCount, setCorrectCount] = useState(0);
+  // 🆕 Flag de fin de quiz
+  const [quizFinished, setQuizFinished] = useState(false);
+
+  const inputRef = useRef<TextInput>(null);
+
+  const { isListening, error, start, stop, cancel } = useSpeechRecognition({
+    onResult: (transcript) => {
+      if (transcript && transcript.trim().length > 0) {
+        setUserAnswer(transcript);
+      }
+    },
+  });
+
   const sentences = isDictation
     ? text
         .split('\n')
@@ -28,7 +77,6 @@ export default function Message({ text, isUser, autoSpeak = false, isDictation =
   const currentSentence = sentences[currentIndex] || '';
   const totalSentences = sentences.length;
 
-  // 🆕 Lecture automatique de la phrase en cours
   useEffect(() => {
     if (isDictation && autoSpeak && !isUser && currentSentence) {
       const timer = setTimeout(() => {
@@ -44,6 +92,31 @@ export default function Message({ text, isUser, autoSpeak = false, isDictation =
     }
   }, [isDictation, autoSpeak, isUser, currentSentence]);
 
+  useEffect(() => {
+    if (isQuiz && quizQuestions && quizQuestions[currentIndex] && !quizFinished) {
+      const timer = setTimeout(() => {
+        setIsPlaying(true);
+        speakText(quizQuestions[currentIndex].question, () => {
+          setIsPlaying(false);
+        });
+      }, 500);
+      return () => {
+        clearTimeout(timer);
+        stopSpeaking();
+      };
+    }
+  }, [isQuiz, currentIndex, quizQuestions, quizFinished]);
+
+  useEffect(() => {
+    if (error === 'permission-denied') {
+      Alert.alert(
+        'Permission refusée',
+        'Autorise le micro dans les paramètres de ton téléphone.'
+      );
+      setShowMicMode(false);
+    }
+  }, [error]);
+
   const handleSpeak = () => {
     if (isPlaying) {
       stopSpeaking();
@@ -52,13 +125,11 @@ export default function Message({ text, isUser, autoSpeak = false, isDictation =
     }
     setIsPlaying(true);
     if (isDictation) {
-      speakTextSlow(currentSentence, () => {
-        setIsPlaying(false);
-      });
+      speakTextSlow(currentSentence, () => setIsPlaying(false));
+    } else if (isQuiz && quizQuestions && quizQuestions[currentIndex]) {
+      speakText(quizQuestions[currentIndex].question, () => setIsPlaying(false));
     } else {
-      speakText(text, () => {
-        setIsPlaying(false);
-      });
+      speakText(text, () => setIsPlaying(false));
     }
   };
 
@@ -76,8 +147,287 @@ export default function Message({ text, isUser, autoSpeak = false, isDictation =
     }
   };
 
+  const handleMicStart = async () => {
+    try {
+      setShowMicMode(true);
+      setUserAnswer('');
+      await start();
+    } catch (e) {
+      setShowMicMode(false);
+      Alert.alert(
+        'Micro non disponible',
+        'La reconnaissance vocale nécessite un Development Build.'
+      );
+    }
+  };
+
+  const handleMicCancel = () => {
+    try {
+      cancel();
+    } catch {}
+    setShowMicMode(false);
+    setUserAnswer('');
+  };
+
   // ============================================================
-  // AFFICHAGE DICTÉE
+  // MODE QUIZ
+  // ============================================================
+  if (isQuiz && quizQuestions && quizQuestions.length > 0) {
+    const currentQuestion = quizQuestions[currentIndex];
+    const totalQuestions = quizQuestions.length;
+    const isLast = currentIndex === totalQuestions - 1;
+
+    const normalizeAnswer = (s: string) =>
+      s
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[.,!?;:]/g, '')
+        .replace(/\s+/g, ' ');
+
+    const validateCurrentAnswer = (answer: string) => {
+      if (!answer.trim() || isValidating) return;
+      setIsValidating(true);
+
+      const isCorrect =
+        normalizeAnswer(answer) === normalizeAnswer(currentQuestion.answer);
+
+      // 🆕 Incrémenter le compteur si correct
+      if (isCorrect) {
+        setCorrectCount((prev) => prev + 1);
+      }
+
+      setFeedback({
+        correct: isCorrect,
+        expected: currentQuestion.answer,
+      });
+
+      onQuizAnswer?.(currentIndex, answer);
+      setIsValidating(false);
+    };
+
+    const handleValidate = () => {
+      validateCurrentAnswer(userAnswer);
+    };
+
+    const handleMicSend = () => {
+      try {
+        stop();
+      } catch {}
+      setShowMicMode(false);
+      if (userAnswer.trim()) {
+        setTimeout(() => validateCurrentAnswer(userAnswer), 50);
+      }
+    };
+
+    const handleNextQuestion = () => {
+      stopSpeaking();
+      setUserAnswer('');
+      setFeedback(null);
+      setShowMicMode(false);
+      setCurrentIndex(currentIndex + 1);
+    };
+
+    // 🆕 Terminer le quiz
+    const handleFinishQuiz = () => {
+      stopSpeaking();
+      setQuizFinished(true);
+      const finalScore = correctCount;
+      onQuizAnswer?.(-1, `FIN:${finalScore}/${totalQuestions}`);
+    };
+
+    // 🆕 Affichage "Quiz terminé"
+    if (quizFinished) {
+      return (
+        <View style={[styles.container, styles.agentContainer]}>
+          <View style={[styles.bubble, styles.agentBubble, styles.quizBubble, styles.quizFinishedBubble]}>
+            <View style={styles.quizHeader}>
+              <Ionicons name="trophy-outline" size={16} color="#2E7D32" />
+              <Text style={styles.quizLabel}>{quizTitle || 'Quiz'}</Text>
+              <View style={styles.quizFinishedBadge}>
+                <Ionicons name="checkmark-circle" size={14} color={Colors.light.background} />
+                <Text style={styles.quizFinishedBadgeText}>Terminé</Text>
+              </View>
+            </View>
+
+            <View style={styles.quizScoreContainer}>
+              <Ionicons name="trophy" size={48} color="#FFB300" />
+              <Text style={styles.quizScoreText}>
+                {correctCount} / {totalQuestions}
+              </Text>
+              <Text style={styles.quizScoreLabel}>
+                {correctCount === totalQuestions
+                  ? 'Score parfait ! 🎉'
+                  : correctCount >= totalQuestions / 2
+                  ? 'Bien joué ! 👏'
+                  : 'Continue à t\'entraîner ! 💪'}
+              </Text>
+            </View>
+
+            <Text style={styles.quizFinishedHint}>
+              Regarde le chat pour la suite 👇
+            </Text>
+          </View>
+        </View>
+      );
+    }
+
+    return (
+      <View style={[styles.container, styles.agentContainer]}>
+        <View style={[styles.bubble, styles.agentBubble, styles.quizBubble]}>
+          <View style={styles.quizHeader}>
+            <Ionicons name="help-circle-outline" size={16} color={Colors.light.primary} />
+            <Text style={styles.quizLabel}>{quizTitle || 'Quiz'}</Text>
+            <Text style={styles.quizProgress}>
+              Question {currentIndex + 1}/{totalQuestions}
+            </Text>
+          </View>
+
+          <View style={styles.quizQuestionRow}>
+            <Text style={styles.quizQuestion}>{currentQuestion.question}</Text>
+            <TouchableOpacity style={styles.quizSpeakButton} onPress={handleSpeak}>
+              <Ionicons
+                name={isPlaying ? 'stop-circle-outline' : 'volume-medium-outline'}
+                size={20}
+                color={Colors.light.primary}
+              />
+            </TouchableOpacity>
+          </View>
+
+          {feedback ? (
+            <View style={styles.quizFeedbackContainer}>
+              <View
+                style={[
+                  styles.quizFeedbackBubble,
+                  feedback.correct ? styles.quizFeedbackCorrect : styles.quizFeedbackWrong,
+                ]}
+              >
+                <Ionicons
+                  name={feedback.correct ? 'checkmark-circle' : 'close-circle'}
+                  size={24}
+                  color={feedback.correct ? '#2E7D32' : '#C62828'}
+                />
+                <Text
+                  style={[
+                    styles.quizFeedbackText,
+                    feedback.correct ? styles.quizFeedbackTextCorrect : styles.quizFeedbackTextWrong,
+                  ]}
+                >
+                  {feedback.correct ? 'Bravo ! 🎉' : 'Pas tout à fait…'}
+                </Text>
+              </View>
+              {!feedback.correct && (
+                <Text style={styles.quizFeedbackExpected}>
+                  La bonne réponse était :{' '}
+                  <Text style={styles.quizFeedbackExpectedBold}>{feedback.expected}</Text>
+                </Text>
+              )}
+              {!isLast ? (
+                <TouchableOpacity
+                  style={[styles.quizButton, styles.quizButtonPrimary]}
+                  onPress={handleNextQuestion}
+                >
+                  <Text style={styles.quizButtonText}>Question suivante</Text>
+                  <Ionicons name="arrow-forward" size={18} color={Colors.light.background} />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.quizButton, styles.quizButtonSuccess]}
+                  onPress={handleFinishQuiz}
+                >
+                  <Ionicons name="checkmark-done" size={18} color={Colors.light.background} />
+                  <Text style={styles.quizButtonText}>Terminer le quiz</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ) : showMicMode ? (
+            <View style={styles.quizMicContainer}>
+              <View style={styles.quizMicRow}>
+                <Ionicons
+                  name={isListening ? 'mic' : 'mic-outline'}
+                  size={20}
+                  color={isListening ? '#C62828' : Colors.light.textSecondary}
+                />
+                <Text
+                  style={[
+                    styles.quizMicText,
+                    !isListening && styles.quizMicTextIdle,
+                  ]}
+                >
+                  {isListening ? 'Je t\'écoute…' : 'Enregistrement terminé'}
+                </Text>
+              </View>
+              {userAnswer ? (
+                <Text style={styles.quizMicTranscript}>« {userAnswer} »</Text>
+              ) : (
+                <Text style={styles.quizMicHint}>
+                  {isListening ? 'Parle maintenant' : 'Aucune parole détectée'}
+                </Text>
+              )}
+              <View style={styles.quizMicActions}>
+                <TouchableOpacity
+                  style={[styles.quizMicButton, styles.quizMicButtonCancel]}
+                  onPress={handleMicCancel}
+                >
+                  <Ionicons name="close" size={20} color={Colors.light.background} />
+                  <Text style={styles.quizMicButtonText}>Annuler</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.quizMicButton, styles.quizMicButtonValidate]}
+                  onPress={handleMicSend}
+                  disabled={!userAnswer.trim()}
+                >
+                  <Ionicons name="send" size={20} color={Colors.light.background} />
+                  <Text style={styles.quizMicButtonText}>Envoyer</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.quizInputContainer}>
+              <TextInput
+                ref={inputRef}
+                style={styles.quizInput}
+                value={userAnswer}
+                onChangeText={setUserAnswer}
+                placeholder="Ta réponse…"
+                placeholderTextColor={Colors.light.textSecondary}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!isValidating}
+                onSubmitEditing={handleValidate}
+                returnKeyType="send"
+              />
+              <TouchableOpacity
+                style={styles.quizMicIcon}
+                onPress={handleMicStart}
+                disabled={isValidating}
+              >
+                <Ionicons name="mic" size={22} color={Colors.light.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.quizValidateButton,
+                  !userAnswer.trim() && styles.quizValidateButtonDisabled,
+                ]}
+                onPress={handleValidate}
+                disabled={!userAnswer.trim() || isValidating}
+              >
+                {isValidating ? (
+                  <ActivityIndicator size="small" color={Colors.light.background} />
+                ) : (
+                  <Ionicons name="checkmark" size={20} color={Colors.light.background} />
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  }
+
+  // ============================================================
+  // MODE DICTÉE
   // ============================================================
   if (isDictation) {
     const isLast = currentIndex === totalSentences - 1;
@@ -86,7 +436,6 @@ export default function Message({ text, isUser, autoSpeak = false, isDictation =
     return (
       <View style={[styles.container, styles.agentContainer]}>
         <View style={[styles.bubble, styles.agentBubble, styles.dictationBubble]}>
-          {/* Header avec progression */}
           <View style={styles.dictationHeader}>
             <Ionicons name="mic-outline" size={16} color={Colors.light.primary} />
             <Text style={styles.dictationLabel}>Dictée</Text>
@@ -103,7 +452,6 @@ export default function Message({ text, isUser, autoSpeak = false, isDictation =
                 🔒 Écoute bien la phrase, puis écris-la sur ton cahier.
               </Text>
 
-              {/* Boutons principaux */}
               <View style={styles.dictationActions}>
                 <TouchableOpacity style={styles.dictationButton} onPress={handleSpeak}>
                   <Ionicons
@@ -126,7 +474,6 @@ export default function Message({ text, isUser, autoSpeak = false, isDictation =
                 </TouchableOpacity>
               </View>
 
-              {/* Navigation Précédent/Suivant */}
               {totalSentences > 1 && (
                 <View style={styles.dictationNav}>
                   <TouchableOpacity
@@ -185,7 +532,6 @@ export default function Message({ text, isUser, autoSpeak = false, isDictation =
             </>
           ) : (
             <>
-              {/* Mode révélé : on affiche toutes les phrases */}
               <Text style={styles.dictationRevealedTitle}>📖 Texte révélé</Text>
               {sentences.map((s, i) => (
                 <Text
@@ -215,7 +561,7 @@ export default function Message({ text, isUser, autoSpeak = false, isDictation =
   }
 
   // ============================================================
-  // AFFICHAGE MESSAGE NORMAL
+  // MODE MESSAGE NORMAL
   // ============================================================
   return (
     <View style={[styles.container, isUser ? styles.userContainer : styles.agentContainer]}>
@@ -242,12 +588,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     flexDirection: 'row',
   },
-  userContainer: {
-    justifyContent: 'flex-end',
-  },
-  agentContainer: {
-    justifyContent: 'flex-start',
-  },
+  userContainer: { justifyContent: 'flex-end' },
+  agentContainer: { justifyContent: 'flex-start' },
   bubble: {
     maxWidth: '85%',
     paddingVertical: Spacing.three,
@@ -262,22 +604,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.backgroundElement,
     borderBottomLeftRadius: Spacing.one,
   },
-  text: {
-    fontSize: 15,
-    lineHeight: 21,
-  },
-  userText: {
-    color: Colors.light.background,
-  },
-  agentText: {
-    color: Colors.light.text,
-  },
-  speakButton: {
-    marginTop: Spacing.two,
-    alignSelf: 'flex-start',
-  },
+  text: { fontSize: 15, lineHeight: 21 },
+  userText: { color: Colors.light.background },
+  agentText: { color: Colors.light.text },
+  speakButton: { marginTop: Spacing.two, alignSelf: 'flex-start' },
 
-  // 🆕 Dictée
   dictationBubble: {
     backgroundColor: '#FFF8E1',
     borderWidth: 2,
@@ -334,9 +665,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.light.background,
   },
-  dictationButtonTextOutline: {
-    color: Colors.light.primary,
-  },
+  dictationButtonTextOutline: { color: Colors.light.primary },
   dictationNav: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -352,17 +681,13 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.two,
     paddingHorizontal: Spacing.two,
   },
-  dictationNavButtonDisabled: {
-    opacity: 0.4,
-  },
+  dictationNavButtonDisabled: { opacity: 0.4 },
   dictationNavText: {
     fontSize: 14,
     fontWeight: '600',
     color: Colors.light.primary,
   },
-  dictationNavTextDisabled: {
-    color: Colors.light.textSecondary,
-  },
+  dictationNavTextDisabled: { color: Colors.light.textSecondary },
   dictationEndHint: {
     fontSize: 12,
     color: Colors.light.textSecondary,
@@ -385,5 +710,218 @@ const styles = StyleSheet.create({
   dictationRevealedTextActive: {
     fontWeight: '700',
     color: Colors.light.primary,
+  },
+
+  quizBubble: {
+    backgroundColor: '#E8F5E9',
+    borderWidth: 2,
+    borderColor: '#2E7D32',
+    minWidth: 280,
+  },
+  quizFinishedBubble: {
+    backgroundColor: '#FFF3E0',
+    borderColor: '#FFB300',
+  },
+  quizFinishedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#2E7D32',
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 2,
+    borderRadius: Spacing.one,
+    marginLeft: 'auto',
+  },
+  quizFinishedBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.light.background,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  quizScoreContainer: {
+    alignItems: 'center',
+    paddingVertical: Spacing.four,
+    gap: Spacing.two,
+  },
+  quizScoreText: {
+    fontSize: 36,
+    fontWeight: '800',
+    color: '#2E7D32',
+  },
+  quizScoreLabel: {
+    fontSize: 14,
+    color: Colors.light.text,
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+  quizFinishedHint: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    textAlign: 'center',
+    fontStyle: 'italic',
+    marginTop: Spacing.two,
+  },
+  quizHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.three,
+    gap: Spacing.one,
+  },
+  quizLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2E7D32',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  quizProgress: {
+    fontSize: 12,
+    color: Colors.light.textSecondary,
+    marginLeft: 'auto',
+    fontWeight: '600',
+  },
+  quizQuestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Spacing.three,
+    gap: Spacing.two,
+  },
+  quizQuestion: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    color: Colors.light.text,
+    lineHeight: 22,
+  },
+  quizSpeakButton: { padding: Spacing.one },
+  quizInputContainer: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+    alignItems: 'center',
+  },
+  quizInput: {
+    flex: 1,
+    backgroundColor: Colors.light.background,
+    paddingVertical: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Spacing.two,
+    fontSize: 16,
+    color: Colors.light.text,
+    borderWidth: 1,
+    borderColor: '#A5D6A7',
+  },
+  quizMicIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: Spacing.two,
+    backgroundColor: Colors.light.backgroundElement,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#A5D6A7',
+  },
+  quizValidateButton: {
+    backgroundColor: '#2E7D32',
+    width: 44,
+    height: 44,
+    borderRadius: Spacing.two,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quizValidateButtonDisabled: { backgroundColor: '#C8E6C9' },
+  quizFeedbackContainer: { marginTop: Spacing.two },
+  quizFeedbackBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingVertical: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Spacing.two,
+    marginBottom: Spacing.two,
+  },
+  quizFeedbackCorrect: { backgroundColor: '#C8E6C9' },
+  quizFeedbackWrong: { backgroundColor: '#FFCDD2' },
+  quizFeedbackText: { fontSize: 15, fontWeight: '700' },
+  quizFeedbackTextCorrect: { color: '#2E7D32' },
+  quizFeedbackTextWrong: { color: '#C62828' },
+  quizFeedbackExpected: {
+    fontSize: 14,
+    color: Colors.light.text,
+    marginBottom: Spacing.two,
+    fontStyle: 'italic',
+  },
+  quizFeedbackExpectedBold: {
+    fontWeight: '700',
+    color: '#2E7D32',
+  },
+  quizButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.two,
+    paddingVertical: Spacing.three,
+    paddingHorizontal: Spacing.four,
+    borderRadius: Spacing.two,
+    marginTop: Spacing.two,
+  },
+  quizButtonPrimary: { backgroundColor: Colors.light.primary },
+  quizButtonSuccess: { backgroundColor: '#2E7D32' },
+  quizButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.light.background,
+  },
+  quizMicContainer: { marginTop: Spacing.two },
+  quizMicRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginBottom: Spacing.two,
+  },
+  quizMicText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#C62828',
+  },
+  quizMicTextIdle: {
+    color: Colors.light.textSecondary,
+  },
+  quizMicTranscript: {
+    fontSize: 16,
+    color: Colors.light.text,
+    fontStyle: 'italic',
+    paddingVertical: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    backgroundColor: Colors.light.background,
+    borderRadius: Spacing.two,
+    marginBottom: Spacing.two,
+  },
+  quizMicHint: {
+    fontSize: 14,
+    color: Colors.light.textSecondary,
+    fontStyle: 'italic',
+    paddingVertical: Spacing.two,
+    marginBottom: Spacing.two,
+  },
+  quizMicActions: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  quizMicButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.two,
+    paddingVertical: Spacing.three,
+    borderRadius: Spacing.two,
+  },
+  quizMicButtonCancel: { backgroundColor: '#C62828' },
+  quizMicButtonValidate: { backgroundColor: '#2E7D32' },
+  quizMicButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.light.background,
   },
 });
