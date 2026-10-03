@@ -138,7 +138,8 @@ function isScheduleQuestion(text: string): boolean {
 export default function HomeScreen() {
   const [agentMenuVisible, setAgentMenuVisible] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  // 🆕 Prof par défaut à l'ouverture
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>('prof');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
@@ -998,7 +999,6 @@ export default function HomeScreen() {
         ];
       } else if (isPdf && pendingFile.base64) {
         const extractResult = await extractPdfText(pendingFile.base64);
-        // 🆕 LOG DIAGNOSTIC PDF
         console.log('📄 PDF extraction:', {
           success: extractResult.success,
           textLength: extractResult.text?.length || 0,
