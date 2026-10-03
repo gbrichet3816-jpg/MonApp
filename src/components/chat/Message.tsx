@@ -10,14 +10,7 @@ import {
   View,
 } from 'react-native';
 
-import { isTtsDownloaded, openProfDatabase, setTtsDownloaded } from '@/agents/prof/database';
 import { speakText, speakTextSlow, stopSpeaking } from '@/config/speech';
-import {
-  downloadModel,
-  isSupertonicAvailable,
-  setModelDownloaded,
-} from '@/config/tts';
-import { getLocalProfile } from '@/config/user';
 import { Colors, Spacing } from '@/constants/theme';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 
@@ -35,7 +28,6 @@ type Props = {
   quizTitle?: string;
   quizQuestions?: QuizQuestion[];
   onQuizAnswer?: (questionIndex: number, userAnswer: string) => void;
-  onTtsDownloaded?: () => void;
 };
 
 export default function Message({
@@ -47,7 +39,6 @@ export default function Message({
   quizTitle,
   quizQuestions,
   onQuizAnswer,
-  onTtsDownloaded,
 }: Props) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRevealed, setIsRevealed] = useState(false);
@@ -64,35 +55,9 @@ export default function Message({
   const [correctCount, setCorrectCount] = useState(0);
   const [quizFinished, setQuizFinished] = useState(false);
 
-  // 🆕 État du téléchargement Supertonic-3
-  const [showDownloadProposal, setShowDownloadProposal] = useState(false);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [ttsReady, setTtsReady] = useState(false);
-
   const transcriptRef = useRef('');
   const isListeningRef = useRef(false);
   const inputRef = useRef<TextInput>(null);
-
-  // Charger l'état TTS au montage
-  useEffect(() => {
-    const loadTtsState = async () => {
-      try {
-        const db = await openProfDatabase();
-        const profile = getLocalProfile();
-        if (!profile) return;
-        const userId = profile.code ?? 'default';
-        const downloaded = await isTtsDownloaded(db, userId);
-        if (downloaded && isSupertonicAvailable()) {
-          setTtsReady(true);
-          setModelDownloaded(true);
-        }
-      } catch (e) {
-        console.warn('[TTS] Erreur chargement état:', e);
-      }
-    };
-    loadTtsState();
-  }, []);
 
   const { isListening, error, start, stop, cancel } = useSpeechRecognition({
     onResult: (transcript) => {
@@ -163,7 +128,7 @@ export default function Message({
     }
   }, [error]);
 
-  // 🆕 Lecture du message avec vérification Supertonic-3
+  // Lecture normale — voix système
   const handleSpeak = async () => {
     if (isPlaying) {
       stopSpeaking();
@@ -171,14 +136,6 @@ export default function Message({
       return;
     }
 
-    // Si Supertonic-3 n'est pas prêt et pas déjà en cours de proposition
-    if (!ttsReady && !isDownloading && !showDownloadProposal) {
-      // Afficher la proposition de téléchargement
-      setShowDownloadProposal(true);
-      return;
-    }
-
-    // Lecture normale
     setIsPlaying(true);
     if (isDictation) {
       speakTextSlow(currentSentence, () => setIsPlaying(false));
@@ -187,56 +144,6 @@ export default function Message({
     } else {
       speakText(text, () => setIsPlaying(false));
     }
-  };
-
-  // 🆕 Accepte le téléchargement
-  const handleAcceptDownload = async () => {
-    setShowDownloadProposal(false);
-    setIsDownloading(true);
-    setDownloadProgress(0);
-
-    try {
-      const db = await openProfDatabase();
-      const profile = getLocalProfile();
-      if (!profile) throw new Error('Pas de profil');
-      const userId = profile.code ?? 'default';
-
-      const success = await downloadModel((percent) => {
-        setDownloadProgress(percent);
-      });
-
-      if (success) {
-        await setTtsDownloaded(db, userId);
-        setTtsReady(true);
-        setIsDownloading(false);
-        Alert.alert(
-          'Voix installée ! 🎉',
-          'Prof a maintenant une voix naturelle. Clique à nouveau sur 🔊 pour l\'écouter.',
-          [{ text: 'Super !' }]
-        );
-        onTtsDownloaded?.();
-      } else {
-        setIsDownloading(false);
-        Alert.alert(
-          'Échec du téléchargement',
-          'La voix naturelle n\'a pas pu être installée. On réessaiera plus tard.',
-          [{ text: 'OK' }]
-        );
-      }
-    } catch (e: any) {
-      setIsDownloading(false);
-      console.warn('[TTS] Erreur:', e);
-      Alert.alert(
-        'Erreur',
-        'Impossible de télécharger la voix naturelle.',
-        [{ text: 'OK' }]
-      );
-    }
-  };
-
-  // 🆕 Refuse le téléchargement
-  const handleRefuseDownload = () => {
-    setShowDownloadProposal(false);
   };
 
   const handleNext = () => {
@@ -559,52 +466,6 @@ export default function Message({
             />
           </TouchableOpacity>
         )}
-
-        {/* 🆕 Proposition de téléchargement de la voix */}
-        {!isUser && showDownloadProposal && !isDownloading && (
-          <View style={styles.ttsProposal}>
-            <View style={styles.ttsProposalHeader}>
-              <Ionicons name="sparkles" size={18} color="#7E57C2" />
-              <Text style={styles.ttsProposalTitle}>Voix naturelle disponible !</Text>
-            </View>
-            <Text style={styles.ttsProposalText}>
-              Je peux avoir une voix beaucoup plus naturelle. Ça prend 210 Mo une seule fois, puis c'est gratuit et hors ligne pour toujours.
-            </Text>
-            <View style={styles.ttsProposalActions}>
-              <TouchableOpacity
-                style={[styles.ttsProposalButton, styles.ttsProposalButtonSecondary]}
-                onPress={handleRefuseDownload}
-              >
-                <Text style={styles.ttsProposalButtonTextSecondary}>Pas maintenant</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.ttsProposalButton, styles.ttsProposalButtonPrimary]}
-                onPress={handleAcceptDownload}
-              >
-                <Ionicons name="download-outline" size={16} color={Colors.light.background} />
-                <Text style={styles.ttsProposalButtonTextPrimary}>Télécharger</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {/* 🆕 Barre de progression du téléchargement */}
-        {!isUser && isDownloading && (
-          <View style={styles.ttsDownloading}>
-            <View style={styles.ttsDownloadingHeader}>
-              <ActivityIndicator size="small" color="#7E57C2" />
-              <Text style={styles.ttsDownloadingText}>
-                Téléchargement de la voix… {Math.round(downloadProgress)}%
-              </Text>
-            </View>
-            <View style={styles.ttsProgressBar}>
-              <View style={[styles.ttsProgressFill, { width: `${downloadProgress}%` }]} />
-            </View>
-            <Text style={styles.ttsDownloadingHint}>
-              Ça peut prendre quelques minutes. Tu peux continuer à discuter avec moi pendant ce temps.
-            </Text>
-          </View>
-        )}
       </View>
     </View>
   );
@@ -621,40 +482,6 @@ const styles = StyleSheet.create({
   userText: { color: Colors.light.background },
   agentText: { color: Colors.light.text },
   speakButton: { marginTop: Spacing.two, alignSelf: 'flex-start' },
-
-  // 🆕 Proposition TTS
-  ttsProposal: {
-    marginTop: Spacing.three,
-    padding: Spacing.three,
-    backgroundColor: '#F3E5F5',
-    borderRadius: Spacing.two,
-    borderWidth: 1,
-    borderColor: '#CE93D8',
-  },
-  ttsProposalHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, marginBottom: Spacing.two },
-  ttsProposalTitle: { fontSize: 14, fontWeight: '700', color: '#6A1B9A' },
-  ttsProposalText: { fontSize: 13, color: Colors.light.text, lineHeight: 19, marginBottom: Spacing.three },
-  ttsProposalActions: { flexDirection: 'row', gap: Spacing.two },
-  ttsProposalButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.one, paddingVertical: Spacing.two, borderRadius: Spacing.two },
-  ttsProposalButtonPrimary: { backgroundColor: '#7E57C2' },
-  ttsProposalButtonSecondary: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: '#7E57C2' },
-  ttsProposalButtonTextPrimary: { fontSize: 13, fontWeight: '600', color: Colors.light.background },
-  ttsProposalButtonTextSecondary: { fontSize: 13, fontWeight: '600', color: '#7E57C2' },
-
-  // 🆕 Téléchargement en cours
-  ttsDownloading: {
-    marginTop: Spacing.three,
-    padding: Spacing.three,
-    backgroundColor: '#F3E5F5',
-    borderRadius: Spacing.two,
-    borderWidth: 1,
-    borderColor: '#CE93D8',
-  },
-  ttsDownloadingHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, marginBottom: Spacing.two },
-  ttsDownloadingText: { fontSize: 13, fontWeight: '600', color: '#6A1B9A', flex: 1 },
-  ttsProgressBar: { height: 8, backgroundColor: '#E1BEE7', borderRadius: 4, overflow: 'hidden', marginBottom: Spacing.two },
-  ttsProgressFill: { height: '100%', backgroundColor: '#7E57C2' },
-  ttsDownloadingHint: { fontSize: 12, color: Colors.light.textSecondary, fontStyle: 'italic' },
 
   // DICTÉE
   dictationBubble: { backgroundColor: '#FFF8E1', borderWidth: 2, borderColor: Colors.light.primary, borderStyle: 'dashed', minWidth: 260 },
