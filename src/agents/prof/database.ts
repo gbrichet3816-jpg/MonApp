@@ -5,7 +5,7 @@ import * as SQLite from 'expo-sqlite';
 
 const DB_NAME = 'agents.db';
 
-// 🆕 Cache de la connexion (singleton) pour éviter les NullPointerException
+// Cache de la connexion (singleton) pour éviter les NullPointerException
 let profDb: SQLite.SQLiteDatabase | null = null;
 let isInitialized = false;
 
@@ -44,6 +44,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
       weather_cache_at INTEGER,
       weather_city_refusals INTEGER DEFAULT 0,
       weather_enabled INTEGER DEFAULT 1,
+      tts_downloaded INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -146,6 +147,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
     `ALTER TABLE prof_profile ADD COLUMN weather_cache_at INTEGER;`,
     `ALTER TABLE prof_profile ADD COLUMN weather_city_refusals INTEGER DEFAULT 0;`,
     `ALTER TABLE prof_profile ADD COLUMN weather_enabled INTEGER DEFAULT 1;`,
+    `ALTER TABLE prof_profile ADD COLUMN tts_downloaded INTEGER DEFAULT 0;`,
     `ALTER TABLE prof_state ADD COLUMN morning_briefing_hour INTEGER DEFAULT 7;`,
     `ALTER TABLE prof_state ADD COLUMN morning_briefing_minute INTEGER DEFAULT 30;`,
     `ALTER TABLE prof_state ADD COLUMN morning_briefing_enabled INTEGER DEFAULT 0;`,
@@ -188,6 +190,7 @@ export interface ProfProfile {
   weather_cache_at: number | null;
   weather_city_refusals: number;
   weather_enabled: number;
+  tts_downloaded: number;
   created_at: number;
   updated_at: number;
 }
@@ -203,13 +206,13 @@ export async function createProfProfile(db: SQLite.SQLiteDatabase, userId: strin
     `INSERT OR REPLACE INTO prof_profile
      (user_id, child_name, child_age, child_grade, child_level, points, onboarded,
       weather_city, weather_cache_json, weather_cache_at, weather_city_refusals, weather_enabled,
-      created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 0, 1, NULL, NULL, NULL, 0, 1, ?, ?)`,
+      tts_downloaded, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 0, 1, NULL, NULL, NULL, 0, 1, 0, ?, ?)`,
     [userId, childName, childAge, childGrade, childLevel, now, now]
   );
 }
 
-export async function updateProfProfile(db: SQLite.SQLiteDatabase, userId: string, updates: Partial<Pick<ProfProfile, 'child_name' | 'child_age' | 'child_grade' | 'child_level' | 'points' | 'weather_city' | 'weather_cache_json' | 'weather_cache_at' | 'weather_city_refusals' | 'weather_enabled'>>): Promise<void> {
+export async function updateProfProfile(db: SQLite.SQLiteDatabase, userId: string, updates: Partial<Pick<ProfProfile, 'child_name' | 'child_age' | 'child_grade' | 'child_level' | 'points' | 'weather_city' | 'weather_cache_json' | 'weather_cache_at' | 'weather_city_refusals' | 'weather_enabled' | 'tts_downloaded'>>): Promise<void> {
   const fields: string[] = [];
   const values: any[] = [];
 
@@ -223,6 +226,7 @@ export async function updateProfProfile(db: SQLite.SQLiteDatabase, userId: strin
   if (updates.weather_cache_at !== undefined) { fields.push('weather_cache_at = ?'); values.push(updates.weather_cache_at); }
   if (updates.weather_city_refusals !== undefined) { fields.push('weather_city_refusals = ?'); values.push(updates.weather_city_refusals); }
   if (updates.weather_enabled !== undefined) { fields.push('weather_enabled = ?'); values.push(updates.weather_enabled); }
+  if (updates.tts_downloaded !== undefined) { fields.push('tts_downloaded = ?'); values.push(updates.tts_downloaded); }
 
   if (fields.length === 0) return;
   fields.push('updated_at = ?');
@@ -233,6 +237,28 @@ export async function updateProfProfile(db: SQLite.SQLiteDatabase, userId: strin
 
 export async function addProfPoints(db: SQLite.SQLiteDatabase, userId: string, delta: number): Promise<void> {
   await db.runAsync(`UPDATE prof_profile SET points = points + ?, updated_at = ? WHERE user_id = ?`, [delta, Date.now(), userId]);
+}
+
+// ============================================================
+// 🆕 TTS (Supertonic-3)
+// ============================================================
+
+/**
+ * Vérifie si le modèle TTS a été téléchargé.
+ */
+export async function isTtsDownloaded(db: SQLite.SQLiteDatabase, userId: string): Promise<boolean> {
+  const profile = await getProfProfile(db, userId);
+  return profile?.tts_downloaded === 1;
+}
+
+/**
+ * Marque le modèle TTS comme téléchargé.
+ */
+export async function setTtsDownloaded(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
+  await db.runAsync(
+    `UPDATE prof_profile SET tts_downloaded = 1, updated_at = ? WHERE user_id = ?`,
+    [Date.now(), userId]
+  );
 }
 
 // ============================================================

@@ -1,7 +1,12 @@
 // src/config/speech.ts
-// Lecture à voix haute + nettoyage + découpage intelligent
+// Lecture à voix haute : nettoyage + découpage + délégation à tts.ts
 
 import * as Speech from 'expo-speech';
+import {
+  isSupertonicAvailable,
+  speak as ttsSpeak,
+  stop as ttsStop,
+} from './tts';
 
 let isSpeaking = false;
 
@@ -49,7 +54,7 @@ export function cleanTextForSpeech(text: string): string {
 }
 
 // ============================================================
-// DÉCOUPAGE PAR BLOCS (UNIQUEMENT pour les textes > 3500 caractères)
+// DÉCOUPAGE PAR BLOCS (textes très longs)
 // ============================================================
 
 function splitIntoBlocks(text: string, maxSize: number = 3500): string[] {
@@ -72,7 +77,7 @@ function splitIntoBlocks(text: string, maxSize: number = 3500): string[] {
 }
 
 // ============================================================
-// DÉCOUPAGE INTELLIGENT (UNIQUEMENT pour la DICTÉE)
+// DÉCOUPAGE INTELLIGENT (dictée)
 // ============================================================
 
 export interface SpeechSegment {
@@ -147,11 +152,11 @@ export function smartSplit(text: string): SpeechSegment[] {
 // LECTURE DE SEGMENTS (dictée)
 // ============================================================
 
-function speakSegments(
+async function speakSegments(
   segments: SpeechSegment[],
   rate: number,
   onDone?: () => void
-) {
+): Promise<void> {
   if (segments.length === 0) {
     isSpeaking = false;
     onDone?.();
@@ -160,7 +165,7 @@ function speakSegments(
 
   let currentIndex = 0;
 
-  const speakNext = () => {
+  const speakNext = async () => {
     if (currentIndex >= segments.length) {
       isSpeaking = false;
       onDone?.();
@@ -170,16 +175,15 @@ function speakSegments(
     const segment = segments[currentIndex];
     currentIndex++;
 
-    Speech.speak(segment.text, {
-      language: 'fr-FR',
-      pitch: 1.0,
-      rate: rate,
+    await ttsSpeak(segment.text, rate, {
       onDone: () => {
         setTimeout(() => {
           if (isSpeaking) speakNext();
         }, segment.pauseAfterMs);
       },
-      onStopped: () => { isSpeaking = false; },
+      onStopped: () => {
+        isSpeaking = false;
+      },
       onError: () => {
         setTimeout(() => {
           if (isSpeaking) speakNext();
@@ -188,18 +192,18 @@ function speakSegments(
     });
   };
 
-  speakNext();
+  await speakNext();
 }
 
 // ============================================================
-// LECTURE DE BLOCS (chat normal — pour textes > 3500 car uniquement)
+// LECTURE DE BLOCS (chat normal — textes > 3500 car)
 // ============================================================
 
-function speakBlocks(
+async function speakBlocks(
   blocks: string[],
   rate: number,
   onDone?: () => void
-) {
+): Promise<void> {
   if (blocks.length === 0) {
     isSpeaking = false;
     onDone?.();
@@ -208,7 +212,7 @@ function speakBlocks(
 
   let currentIndex = 0;
 
-  const speakNext = () => {
+  const speakNext = async () => {
     if (currentIndex >= blocks.length) {
       isSpeaking = false;
       onDone?.();
@@ -218,16 +222,15 @@ function speakBlocks(
     const block = blocks[currentIndex];
     currentIndex++;
 
-    Speech.speak(block, {
-      language: 'fr-FR',
-      pitch: 1.0,
-      rate: rate,
+    await ttsSpeak(block, rate, {
       onDone: () => {
         setTimeout(() => {
           if (isSpeaking) speakNext();
         }, 100);
       },
-      onStopped: () => { isSpeaking = false; },
+      onStopped: () => {
+        isSpeaking = false;
+      },
       onError: () => {
         setTimeout(() => {
           if (isSpeaking) speakNext();
@@ -236,7 +239,7 @@ function speakBlocks(
     });
   };
 
-  speakNext();
+  await speakNext();
 }
 
 // ============================================================
@@ -245,11 +248,11 @@ function speakBlocks(
 
 /**
  * Lit un texte à voix haute NORMALEMENT (chat classique).
- * ✅ LECTURE D'UN BLOC, PAS DE COUPURE
- * (sauf si le texte dépasse 3500 caractères → découpage par blocs silencieux)
+ * Utilise Supertonic-3 si dispo, sinon fallback expo-speech.
+ * Pas de coupure (sauf si > 3500 caractères).
  */
 export function speakText(text: string, onDone?: () => void) {
-  Speech.stop();
+  ttsStop();
 
   const cleanText = cleanTextForSpeech(text);
   if (!cleanText) {
@@ -260,23 +263,22 @@ export function speakText(text: string, onDone?: () => void) {
   isSpeaking = true;
 
   if (cleanText.length <= 3500) {
-    // ✅ LECTURE D'UN BLOC — pas de coupure
-    Speech.speak(cleanText, {
-      language: 'fr-FR',
-      pitch: 1.0,
-      rate: 0.95,
+    // Lecture d'un seul bloc
+    ttsSpeak(cleanText, 0.95, {
       onDone: () => {
         isSpeaking = false;
         onDone?.();
       },
-      onStopped: () => { isSpeaking = false; },
+      onStopped: () => {
+        isSpeaking = false;
+      },
       onError: () => {
         isSpeaking = false;
         onDone?.();
       },
     });
   } else {
-    // Texte très long (> 3500 car) → découpage par blocs
+    // Texte très long → découpage par blocs
     const blocks = splitIntoBlocks(cleanText);
     speakBlocks(blocks, 0.95, onDone);
   }
@@ -284,10 +286,11 @@ export function speakText(text: string, onDone?: () => void) {
 
 /**
  * Lit un texte LENTEMENT pour une dictée.
- * ✅ DÉCOUPAGE INTELLIGENT avec pauses longues
+ * Utilise Supertonic-3 si dispo, sinon fallback expo-speech.
+ * Découpage intelligent avec pauses longues.
  */
 export function speakTextSlow(text: string, onDone?: () => void) {
-  Speech.stop();
+  ttsStop();
 
   const cleanText = cleanTextForSpeech(text);
   if (!cleanText) {
@@ -305,12 +308,21 @@ export function speakTextSlow(text: string, onDone?: () => void) {
   speakSegments(dictationSegments, 0.6, onDone);
 }
 
+/**
+ * Arrête la lecture en cours.
+ */
 export function stopSpeaking() {
-  Speech.stop();
+  ttsStop();
   isSpeaking = false;
 }
 
+/**
+ * Vérifie si des voix françaises sont disponibles (expo-speech).
+ */
 export async function getFrenchVoices() {
   const voices = await Speech.getAvailableVoicesAsync();
   return voices.filter((v) => v.language.startsWith('fr'));
 }
+
+// Re-export pour simplifier
+export { isSupertonicAvailable };
