@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, AppState, KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
+import { Alert, AppState, KeyboardAvoidingView, LogBox, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+// Masquer le warning cosmétique d'expo-router (Fast Refresh)
+LogBox.ignoreLogs([
+  "Can't perform a React state update on a component that hasn't mounted yet",
+]);
 
 import { AGENTS } from '@/agents';
 import {
@@ -133,7 +138,6 @@ function isScheduleQuestion(text: string): boolean {
   return keywords.some((k) => lower.includes(k));
 }
 
-// Trouve un tool result qui commence par un préfixe (QUIZ/DICTATION)
 function findToolResult(toolResults: string[], prefix: string): string | null {
   return toolResults.find((r) => r.startsWith(prefix)) || null;
 }
