@@ -161,7 +161,6 @@ export default function HomeScreen() {
     return () => { isMounted.current = false; };
   }, []);
 
-  // 🆕 Bug #3 : checkpoint SQLite quand l'app passe en arrière-plan
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'background' || nextState === 'inactive') {
@@ -441,7 +440,9 @@ export default function HomeScreen() {
         const title = args.title || 'Quiz';
         const questions = args.questions || [];
         if (!questions.length) return 'Aucune question fournie.';
-        return `__QUIZ__:${JSON.stringify({ title, questions })}`;
+        const result = `__QUIZ__:${JSON.stringify({ title, questions })}`;
+        console.log('✅ [DEBUG] Quiz sérialisé:', result.substring(0, 100));
+        return result;
       }
 
       if (call.name === 'startDictation') {
@@ -721,8 +722,6 @@ export default function HomeScreen() {
 
     try {
       let systemPrompt = selectedAgent.systemPrompt;
-
-      // 🆕 Bug #10 : injection du contexte temporel
       systemPrompt = `${systemPrompt}\n\n${getDateContext()}`;
 
       if (selectedAgent.id === 'prof' && isBilanRequest(text)) {
@@ -847,6 +846,9 @@ export default function HomeScreen() {
         const firstTool = currentResult.toolCalls[0];
         const toolResult = await executeToolCall(firstTool, selectedAgent.id);
 
+        console.log('🔍 [DEBUG] toolResult complet:', toolResult);
+        console.log('🔍 [DEBUG] Est un QUIZ ?', toolResult.startsWith('__QUIZ__:'));
+
         const newResult = await sendToolResultToAgent({
           messages: apiMessages,
           toolCall: firstTool,
@@ -859,11 +861,14 @@ export default function HomeScreen() {
 
         if (toolResult.startsWith('__QUIZ__:')) {
           const jsonStr = toolResult.replace('__QUIZ__:', '');
+          console.log('🔍 [DEBUG] JSON quiz à parser:', jsonStr);
           let quizData: { title: string; questions: any[] } | null = null;
           try {
             quizData = JSON.parse(jsonStr);
+            console.log('✅ [DEBUG] Quiz parsé:', quizData);
           } catch (e) {
-            console.warn('[Prof] Erreur parsing quiz:', e);
+            console.warn('❌ [DEBUG] Erreur parsing quiz:', e);
+            console.warn('❌ [DEBUG] JSON problématique:', jsonStr);
           }
 
           if (quizData) {
@@ -878,6 +883,7 @@ export default function HomeScreen() {
             setMessages((prev) => [...prev, quizMessage]);
             saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
             messageAlreadyDisplayed = true;
+            console.log('✅ [DEBUG] Message quiz affiché');
           }
 
           if (newResult.reply && newResult.reply.trim().length > 0) {
@@ -1046,7 +1052,6 @@ export default function HomeScreen() {
         { role: 'user', content },
       ];
 
-      // 🆕 Bug #10
       const systemPromptWithDate = `${selectedAgent.systemPrompt}\n\n${getDateContext()}`;
 
       const result = await sendMessageToAgent({
@@ -1067,6 +1072,10 @@ export default function HomeScreen() {
         loopCount++;
         const firstTool = currentResult.toolCalls[0];
         const toolResult = await executeToolCall(firstTool, selectedAgent.id);
+
+        console.log('🔍 [DEBUG] toolResult (file) complet:', toolResult);
+        console.log('🔍 [DEBUG] Est un QUIZ ? (file)', toolResult.startsWith('__QUIZ__:'));
+
         const newResult = await sendToolResultToAgent({
           messages: apiMessages,
           toolCall: firstTool,
@@ -1077,8 +1086,10 @@ export default function HomeScreen() {
 
         if (toolResult.startsWith('__QUIZ__:')) {
           const jsonStr = toolResult.replace('__QUIZ__:', '');
+          console.log('🔍 [DEBUG] JSON quiz (file) à parser:', jsonStr);
           try {
             const quizData = JSON.parse(jsonStr);
+            console.log('✅ [DEBUG] Quiz (file) parsé:', quizData);
             const quizMessage: ChatMessage = {
               id: `agent-quiz-${Date.now()}`,
               text: '',
@@ -1090,7 +1101,9 @@ export default function HomeScreen() {
             setMessages((prev) => [...prev, quizMessage]);
             saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
             messageAlreadyDisplayed = true;
-          } catch (e) { console.warn('[Prof] Parsing quiz:', e); }
+          } catch (e) {
+            console.warn('❌ [DEBUG] Parsing quiz (file):', e);
+          }
           if (newResult.reply && newResult.reply.trim().length > 0) {
             const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
             setMessages((prev) => [...prev, finalMessage]);
@@ -1226,7 +1239,6 @@ export default function HomeScreen() {
         { role: 'user', content },
       ];
 
-      // 🆕 Bug #10
       const systemPromptWithDate = `${selectedAgent.systemPrompt}\n\n${getDateContext()}`;
 
       const result = await sendMessageToAgent({
@@ -1247,6 +1259,10 @@ export default function HomeScreen() {
         loopCount++;
         const firstTool = currentResult.toolCalls[0];
         const toolResult = await executeToolCall(firstTool, selectedAgent.id);
+
+        console.log('🔍 [DEBUG] toolResult (photo) complet:', toolResult);
+        console.log('🔍 [DEBUG] Est un QUIZ ? (photo)', toolResult.startsWith('__QUIZ__:'));
+
         const newResult = await sendToolResultToAgent({
           messages: apiMessages,
           toolCall: firstTool,
@@ -1257,8 +1273,10 @@ export default function HomeScreen() {
 
         if (toolResult.startsWith('__QUIZ__:')) {
           const jsonStr = toolResult.replace('__QUIZ__:', '');
+          console.log('🔍 [DEBUG] JSON quiz (photo) à parser:', jsonStr);
           try {
             const quizData = JSON.parse(jsonStr);
+            console.log('✅ [DEBUG] Quiz (photo) parsé:', quizData);
             const quizMessage: ChatMessage = {
               id: `agent-quiz-${Date.now()}`,
               text: '',
@@ -1270,7 +1288,9 @@ export default function HomeScreen() {
             setMessages((prev) => [...prev, quizMessage]);
             saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
             messageAlreadyDisplayed = true;
-          } catch (e) { console.warn('[Prof] Parsing quiz:', e); }
+          } catch (e) {
+            console.warn('❌ [DEBUG] Parsing quiz (photo):', e);
+          }
           if (newResult.reply && newResult.reply.trim().length > 0) {
             const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
             setMessages((prev) => [...prev, finalMessage]);
@@ -1373,7 +1393,6 @@ export default function HomeScreen() {
       const congratsPrompt = `[SYSTEME] L'enfant vient de terminer le quiz "${quizTitle}" avec un score de ${correct}/${total}. Félicite-le chaleureusement, commente son score (sans juger), et propose-lui soit un nouveau quiz sur un autre thème, soit une autre activité (dictée, révision, exercice). Sois bref et chaleureux.`;
 
       try {
-        // 🆕 Bug #10
         const systemPromptWithDate = `${selectedAgent.systemPrompt}\n\n${getDateContext()}`;
 
         const result = await sendMessageToAgent({
