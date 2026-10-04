@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as FileSystem from 'expo-file-system/legacy';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -239,6 +240,9 @@ export default function LibraryScreen() {
     setFriendPickerVisible(true);
   };
 
+  /**
+   * 🆕 Fix bug #16 : lit le fichier en base64 avant de partager.
+   */
   const handleFriendsSelected = async (friendCodes: string[]) => {
     setFriendPickerVisible(false);
 
@@ -253,11 +257,25 @@ export default function LibraryScreen() {
     let failCount = 0;
 
     for (const doc of docs) {
+      // 🆕 Lire le contenu binaire si le document a un fichier physique
+      let fileData: string | undefined;
+      if (doc.filePath) {
+        try {
+          const base64 = await FileSystem.readAsStringAsync(doc.filePath, {
+            encoding: 'base64',
+          });
+          fileData = base64;
+        } catch (e) {
+          console.warn('[Library] Impossible de lire le fichier:', e);
+        }
+      }
+
       const result = await shareDocumentWithFriends({
         fromCode: profile.code,
         toCodes: friendCodes,
         title: doc.title,
         content: doc.content,
+        fileData,
         fileType: doc.fileType || undefined,
       });
       if (result.success) successCount++;

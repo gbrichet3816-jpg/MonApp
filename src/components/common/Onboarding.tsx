@@ -1,17 +1,21 @@
 import { useState } from 'react';
 import {
-    Alert,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-    generateCode,
-    registerOnServer,
-    saveLocalProfile,
+  generateCode,
+  registerOnServer,
+  saveLocalProfile,
 } from '@/config/user';
 import { Colors, Spacing } from '@/constants/theme';
 
@@ -23,6 +27,10 @@ export default function Onboarding({ onComplete }: Props) {
   const [firstName, setFirstName] = useState('');
   const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // 🆕 Fix bug #17 : SafeArea + padding bottom dynamique
+  const insets = useSafeAreaInsets();
+  const safeBottom = Math.max(insets.bottom, 20);
 
   const handleContinue = async () => {
     const trimmed = firstName.trim();
@@ -69,51 +77,62 @@ export default function Onboarding({ onComplete }: Props) {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>Bienvenue !</Text>
-        <Text style={styles.subtitle}>
-          Avant de commencer, dis-moi qui tu es.
-        </Text>
-
-        <Text style={styles.label}>Ton prénom</Text>
-        <TextInput
-          style={styles.input}
-          value={firstName}
-          onChangeText={setFirstName}
-          placeholder="Ex : Léa"
-          placeholderTextColor={Colors.light.textSecondary}
-          autoCapitalize="words"
-          editable={!isLoading}
-        />
-
-        <Text style={styles.label}>Email du parent (optionnel)</Text>
-        <TextInput
-          style={styles.input}
-          value={email}
-          onChangeText={setEmail}
-          placeholder="Pour récupérer ton compte plus tard"
-          placeholderTextColor={Colors.light.textSecondary}
-          keyboardType="email-address"
-          autoCapitalize="none"
-          editable={!isLoading}
-        />
-
-        <Text style={styles.info}>
-          Un code personnel te sera attribué pour ajouter des amis.
-        </Text>
-      </View>
-
-      <TouchableOpacity
-        style={[styles.button, isLoading && styles.buttonDisabled]}
-        onPress={handleContinue}
-        disabled={isLoading}
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: safeBottom + Spacing.four },
+        ]}
+        keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.buttonText}>
-          {isLoading ? 'Enregistrement...' : 'Continuer'}
-        </Text>
-      </TouchableOpacity>
-    </View>
+        <View style={styles.content}>
+          <Text style={styles.title}>Bienvenue !</Text>
+          <Text style={styles.subtitle}>
+            Avant de commencer, dis-moi qui tu es.
+          </Text>
+
+          <Text style={styles.label}>Ton prénom</Text>
+          <TextInput
+            style={styles.input}
+            value={firstName}
+            onChangeText={setFirstName}
+            placeholder="Ex : Léa"
+            placeholderTextColor={Colors.light.textSecondary}
+            autoCapitalize="words"
+            editable={!isLoading}
+          />
+
+          <Text style={styles.label}>Email du parent (optionnel)</Text>
+          <TextInput
+            style={styles.input}
+            value={email}
+            onChangeText={setEmail}
+            placeholder="Pour récupérer ton compte plus tard"
+            placeholderTextColor={Colors.light.textSecondary}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            editable={!isLoading}
+          />
+
+          <Text style={styles.info}>
+            Un code personnel te sera attribué pour ajouter des amis.
+          </Text>
+        </View>
+
+        <TouchableOpacity
+          style={[styles.button, isLoading && styles.buttonDisabled]}
+          onPress={handleContinue}
+          disabled={isLoading}
+        >
+          <Text style={styles.buttonText}>
+            {isLoading ? 'Enregistrement...' : 'Continuer'}
+          </Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -121,6 +140,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.light.background,
+  },
+  scrollContent: {
+    flexGrow: 1,
     padding: Spacing.four,
   },
   content: {
@@ -169,6 +191,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.three,
     borderRadius: Spacing.two,
     alignItems: 'center',
+    marginTop: Spacing.three,
   },
   buttonDisabled: {
     opacity: 0.5,

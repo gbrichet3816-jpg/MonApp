@@ -1,12 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Image,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -31,9 +36,26 @@ export default function PhotoMessageModal({
 }: Props) {
   const [message, setMessage] = useState('');
   const [action, setAction] = useState<PhotoAction>('agent');
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   const insets = useSafeAreaInsets();
   const safeBottom = Math.max(insets.bottom, 80);
+
+  // 🆕 Détection hauteur clavier
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  const effectiveBottom = keyboardHeight > 0 ? keyboardHeight + 16 : safeBottom;
 
   const { isListening, start, stop, cancel } = useSpeechRecognition({
     onResult: (transcript) => {
@@ -84,93 +106,104 @@ export default function PhotoMessageModal({
       transparent
       onRequestClose={handleCancel}
     >
-      <View style={styles.overlay}>
-        <View style={[styles.panel, { paddingBottom: safeBottom }]}>
-          {/* 🆕 Barre du haut avec bouton Fermer */}
-          <View style={styles.topBar}>
-            <TouchableOpacity style={styles.topBarClose} onPress={handleCancel}>
-              <Ionicons name="close" size={28} color={Colors.light.text} />
-            </TouchableOpacity>
-            <Text style={styles.topBarTitle}>📷 Photo prête</Text>
-            <View style={{ width: 28 }} />
-          </View>
+      <KeyboardAvoidingView
+        style={styles.overlay}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+          <View style={styles.flexEnd}>
+            <View style={[styles.panel, { paddingBottom: effectiveBottom }]}>
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.topBar}>
+                  <TouchableOpacity style={styles.topBarClose} onPress={handleCancel}>
+                    <Ionicons name="close" size={28} color={Colors.light.text} />
+                  </TouchableOpacity>
+                  <Text style={styles.topBarTitle}>📷 Photo prête</Text>
+                  <View style={{ width: 28 }} />
+                </View>
 
-          <Image source={{ uri: photoUri }} style={styles.preview} resizeMode="contain" />
+                <Image source={{ uri: photoUri }} style={styles.preview} resizeMode="contain" />
 
-          <TouchableOpacity
-            style={styles.checkboxRow}
-            onPress={toggleAgentSave}
-          >
-            <Ionicons
-              name={action === 'agent+save' ? 'checkbox' : 'square-outline'}
-              size={24}
-              color={action === 'agent+save' ? Colors.light.primary : Colors.light.textSecondary}
-            />
-            <Text style={styles.checkboxLabel}>
-              Envoyer à l'agent + Enregistrer dans la bibliothèque
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.checkboxRow}
-            onPress={toggleSaveOnly}
-          >
-            <Ionicons
-              name={action === 'save' ? 'checkbox' : 'square-outline'}
-              size={24}
-              color={action === 'save' ? Colors.light.primary : Colors.light.textSecondary}
-            />
-            <Text style={styles.checkboxLabel}>
-              Enregistrer seulement (sans l'agent)
-            </Text>
-          </TouchableOpacity>
-
-          <Text style={styles.defaultHint}>
-            {action === 'agent' && '(Rien de coché = envoi à l\'agent)'}
-            {action === 'agent+save' && '(Envoi + sauvegarde)'}
-            {action === 'save' && '(Sauvegarde uniquement)'}
-          </Text>
-
-          {showInput && (
-            <>
-              <Text style={styles.label}>Ajouter un message (optionnel)</Text>
-
-              <View style={styles.inputRow}>
-                <TextInput
-                  style={styles.input}
-                  value={message}
-                  onChangeText={setMessage}
-                  placeholder={isListening ? 'Je t\'écoute...' : 'Ex: Analyse cette photo'}
-                  placeholderTextColor={Colors.light.textSecondary}
-                  multiline
-                  editable={!isListening}
-                />
                 <TouchableOpacity
-                  style={[styles.micButton, isListening && styles.micButtonActive]}
-                  onPress={handleMicPress}
+                  style={styles.checkboxRow}
+                  onPress={toggleAgentSave}
                 >
                   <Ionicons
-                    name={isListening ? 'stop' : 'mic'}
-                    size={22}
-                    color={Colors.light.background}
+                    name={action === 'agent+save' ? 'checkbox' : 'square-outline'}
+                    size={24}
+                    color={action === 'agent+save' ? Colors.light.primary : Colors.light.textSecondary}
                   />
+                  <Text style={styles.checkboxLabel}>
+                    Envoyer à l'agent + Enregistrer dans la bibliothèque
+                  </Text>
                 </TouchableOpacity>
-              </View>
 
-              {isListening && (
-                <Text style={styles.listeningHint}>
-                  🎤 Parle, ton message s'écrit tout seul
+                <TouchableOpacity
+                  style={styles.checkboxRow}
+                  onPress={toggleSaveOnly}
+                >
+                  <Ionicons
+                    name={action === 'save' ? 'checkbox' : 'square-outline'}
+                    size={24}
+                    color={action === 'save' ? Colors.light.primary : Colors.light.textSecondary}
+                  />
+                  <Text style={styles.checkboxLabel}>
+                    Enregistrer seulement (sans l'agent)
+                  </Text>
+                </TouchableOpacity>
+
+                <Text style={styles.defaultHint}>
+                  {action === 'agent' && '(Rien de coché = envoi à l\'agent)'}
+                  {action === 'agent+save' && '(Envoi + sauvegarde)'}
+                  {action === 'save' && '(Sauvegarde uniquement)'}
                 </Text>
-              )}
-            </>
-          )}
 
-          <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
-            <Ionicons name="checkmark-circle" size={20} color={Colors.light.background} />
-            <Text style={styles.sendText}>Valider</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+                {showInput && (
+                  <>
+                    <Text style={styles.label}>Ajouter un message (optionnel)</Text>
+
+                    <View style={styles.inputRow}>
+                      <TextInput
+                        style={styles.input}
+                        value={message}
+                        onChangeText={setMessage}
+                        placeholder={isListening ? 'Je t\'écoute...' : 'Ex: Analyse cette photo'}
+                        placeholderTextColor={Colors.light.textSecondary}
+                        multiline
+                        editable={!isListening}
+                      />
+                      <TouchableOpacity
+                        style={[styles.micButton, isListening && styles.micButtonActive]}
+                        onPress={handleMicPress}
+                      >
+                        <Ionicons
+                          name={isListening ? 'stop' : 'mic'}
+                          size={22}
+                          color={Colors.light.background}
+                        />
+                      </TouchableOpacity>
+                    </View>
+
+                    {isListening && (
+                      <Text style={styles.listeningHint}>
+                        🎤 Parle, ton message s'écrit tout seul
+                      </Text>
+                    )}
+                  </>
+                )}
+
+                <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
+                  <Ionicons name="checkmark-circle" size={20} color={Colors.light.background} />
+                  <Text style={styles.sendText}>Valider</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+          </View>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -181,12 +214,16 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'flex-end',
   },
+  flexEnd: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
   panel: {
     backgroundColor: Colors.light.background,
     borderTopLeftRadius: Spacing.four,
     borderTopRightRadius: Spacing.four,
     padding: Spacing.four,
-    maxHeight: '90%',
+    maxHeight: '95%',
   },
   topBar: {
     flexDirection: 'row',

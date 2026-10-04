@@ -10,9 +10,11 @@ import {
   View,
 } from 'react-native';
 
+import { judgeAnswer } from '@/config/api';
 import { speakText, speakTextSlow, stopSpeaking } from '@/config/speech';
 import { Colors, Spacing } from '@/constants/theme';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
+import { answersMatchLocal, looksAlmostCorrect } from '@/utils/answerMatch';
 
 export type QuizQuestion = {
   question: string;
@@ -30,16 +32,13 @@ type Props = {
   onQuizAnswer?: (questionIndex: number, userAnswer: string) => void;
 };
 
-// 🆕 Nettoyage des balises internes DeepSeek (<||DSML||> etc.)
+// Nettoyage des balises internes DeepSeek (<||DSML||> etc.)
 function cleanDsmlTags(text: string): string {
   if (!text) return '';
   return text
-    // Balises <||DSML||> ... </||DSML||>
     .replace(/<+\|+\|?\s*DSML\s*\|?\|+>+/gi, '')
     .replace(/<\/+\|+\|?\s*DSML\s*\|?\|+>+/gi, '')
-    // Balises <||...||> génériques
     .replace(/<\|[^|>]+\|>/g, '')
-    // Nettoyer les espaces multiples et sauts de ligne en trop
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
@@ -63,7 +62,9 @@ export default function Message({
   const [isValidating, setIsValidating] = useState(false);
   const [feedback, setFeedback] = useState<{
     correct: boolean;
+    almost: boolean;
     expected: string;
+    explanation: string | null;
   } | null>(null);
   const [showMicMode, setShowMicMode] = useState(false);
 
@@ -206,22 +207,73 @@ export default function Message({
     const totalQuestions = quizQuestions.length;
     const isLast = currentIndex === totalQuestions - 1;
 
-    const normalizeAnswer = (s: string) =>
-      s
-        .trim()
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[.,!?;:]/g, '')
-        .replace(/\s+/g, ' ');
-
-    const validateCurrentAnswer = (answer: string) => {
+    /**
+     * 🆕 Validation hybride :
+     * 1. Comparaison locale tolérante → si OK : vert immédiat
+     * 2. Sinon → appel IA → résultat (correct / almost / faux)
+     */
+    const validateCurrentAnswer = async (answer: string) => {
       if (!answer.trim() || isValidating) return;
       setIsValidating(true);
-      const isCorrect =
-        normalizeAnswer(answer) === normalizeAnswer(currentQuestion.answer);
-      if (isCorrect) setCorrectCount((prev) => prev + 1);
-      setFeedback({ correct: isCorrect, expected: currentQuestion.answer });
+
+      // Étape 1 : comparaison locale
+      const localMatch = answersMatchLocal(answer, currentQuestion.answer);
+      if (localMatch) {
+        setCorrectCount((prev) => prev + 1);
+        setFeedback({
+          correct: true,
+          almost: false,
+          expected: currentQuestion.answer,
+          explanation: null,
+        });
+        onQuizAnswer?.(currentIndex, answer);
+        setIsValidating(false);
+        return;
+      }
+
+      // Étape 2 : appel IA (uniquement si ça vaut le coup)
+      if (looksAlmostCorrect(answer, currentQuestion.answer)) {
+        const result = await judgeAnswer({
+          question: currentQuestion.question,
+          expected: currentQuestion.answer,
+          given: answer,
+        });
+
+        if (result.correct) {
+          setCorrectCount((prev) => prev + 1);
+          setFeedback({
+            correct: true,
+            almost: false,
+            expected: currentQuestion.answer,
+            explanation: null,
+          });
+        } else if (result.almost) {
+          // Presque juste → compté juste par bienveillance (Q2 = A)
+          setCorrectCount((prev) => prev + 1);
+          setFeedback({
+            correct: true,
+            almost: true,
+            expected: currentQuestion.answer,
+            explanation: result.explanation,
+          });
+        } else {
+          setFeedback({
+            correct: false,
+            almost: false,
+            expected: currentQuestion.answer,
+            explanation: result.explanation,
+          });
+        }
+      } else {
+        // Vraiment faux → pas besoin d'appeler l'IA
+        setFeedback({
+          correct: false,
+          almost: false,
+          expected: currentQuestion.answer,
+          explanation: null,
+        });
+      }
+
       onQuizAnswer?.(currentIndex, answer);
       setIsValidating(false);
     };
@@ -301,15 +353,43 @@ export default function Message({
 
           {feedback ? (
             <View style={styles.quizFeedbackContainer}>
-              <View style={[styles.quizFeedbackBubble, feedback.correct ? styles.quizFeedbackCorrect : styles.quizFeedbackWrong]}>
-                <Ionicons name={feedback.correct ? 'checkmark-circle' : 'close-circle'} size={24} color={feedback.correct ? '#2E7D32' : '#C62828'} />
-                <Text style={[styles.quizFeedbackText, feedback.correct ? styles.quizFeedbackTextCorrect : styles.quizFeedbackTextWrong]}>
-                  {feedback.correct ? 'Bravo ! 🎉' : 'Pas tout à fait…'}
+              <View style={[
+                styles.quizFeedbackBubble,
+                feedback.correct && !feedback.almost ? styles.quizFeedbackCorrect
+                  : feedback.correct && feedback.almost ? styles.quizFeedbackAlmost
+                  : styles.quizFeedbackWrong
+              ]}>
+                <Ionicons
+                  name={feedback.correct ? 'checkmark-circle' : 'close-circle'}
+                  size={24}
+                  color={feedback.correct && !feedback.almost ? '#2E7D32'
+                    : feedback.correct && feedback.almost ? '#E65100'
+                    : '#C62828'}
+                />
+                <Text style={[
+                  styles.quizFeedbackText,
+                  feedback.correct && !feedback.almost ? styles.quizFeedbackTextCorrect
+                    : feedback.correct && feedback.almost ? styles.quizFeedbackTextAlmost
+                    : styles.quizFeedbackTextWrong
+                ]}>
+                  {feedback.correct && !feedback.almost ? 'Bravo ! 🎉'
+                    : feedback.correct && feedback.almost ? 'Presque ! ✅'
+                    : 'Pas tout à fait…'}
                 </Text>
               </View>
+              {feedback.almost && (
+                <Text style={styles.quizFeedbackAlmostHint}>
+                  On comptait : <Text style={styles.quizFeedbackExpectedBold}>{feedback.expected}</Text>
+                </Text>
+              )}
               {!feedback.correct && (
                 <Text style={styles.quizFeedbackExpected}>
                   La bonne réponse était : <Text style={styles.quizFeedbackExpectedBold}>{feedback.expected}</Text>
+                </Text>
+              )}
+              {feedback.explanation && (
+                <Text style={styles.quizFeedbackExplanation}>
+                  💡 {feedback.explanation}
                 </Text>
               )}
               {!isLast ? (
@@ -542,11 +622,15 @@ const styles = StyleSheet.create({
   quizFeedbackBubble: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, paddingVertical: Spacing.two, paddingHorizontal: Spacing.three, borderRadius: Spacing.two, marginBottom: Spacing.two },
   quizFeedbackCorrect: { backgroundColor: '#C8E6C9' },
   quizFeedbackWrong: { backgroundColor: '#FFCDD2' },
+  quizFeedbackAlmost: { backgroundColor: '#FFE0B2' },
   quizFeedbackText: { fontSize: 15, fontWeight: '700' },
   quizFeedbackTextCorrect: { color: '#2E7D32' },
   quizFeedbackTextWrong: { color: '#C62828' },
+  quizFeedbackTextAlmost: { color: '#E65100' },
   quizFeedbackExpected: { fontSize: 14, color: Colors.light.text, marginBottom: Spacing.two, fontStyle: 'italic' },
+  quizFeedbackAlmostHint: { fontSize: 13, color: '#E65100', marginBottom: Spacing.two, fontStyle: 'italic' },
   quizFeedbackExpectedBold: { fontWeight: '700', color: '#2E7D32' },
+  quizFeedbackExplanation: { fontSize: 13, color: Colors.light.text, marginBottom: Spacing.two, lineHeight: 19, backgroundColor: '#F5F5F5', padding: Spacing.two, borderRadius: Spacing.one },
   quizButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.two, paddingVertical: Spacing.three, paddingHorizontal: Spacing.four, borderRadius: Spacing.two, marginTop: Spacing.two },
   quizButtonPrimary: { backgroundColor: Colors.light.primary },
   quizButtonSuccess: { backgroundColor: '#2E7D32' },

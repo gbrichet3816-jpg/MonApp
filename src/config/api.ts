@@ -5,9 +5,6 @@ export const API_URL = 'https://monapp-server-production.up.railway.app';
 
 const DEFAULT_TIMEOUT_MS = 60000;
 
-/**
- * Wrapper fetch avec timeout automatique.
- */
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
@@ -63,9 +60,6 @@ export type ApiMessage = {
   name?: string;
 };
 
-/**
- * Envoie un message à un agent via le serveur.
- */
 export async function sendMessageToAgent({
   messages,
   agentSystemPrompt,
@@ -103,10 +97,6 @@ export async function sendMessageToAgent({
   };
 }
 
-/**
- * Envoie le résultat d'UN tool call à Prof (2ème appel).
- * ⚠️ Conservé pour compatibilité — préférer sendToolResultsToAgent (pluriel).
- */
 export async function sendToolResultToAgent({
   messages,
   toolCall,
@@ -129,11 +119,6 @@ export async function sendToolResultToAgent({
   });
 }
 
-/**
- * 🆕 Envoie les résultats de PLUSIEURS tool calls en un seul appel.
- * Respecte le format OpenAI/DeepSeek :
- *   [user] → [assistant with N tool_calls] → [N tools with results]
- */
 export async function sendToolResultsToAgent({
   messages,
   toolCalls,
@@ -151,7 +136,6 @@ export async function sendToolResultsToAgent({
     throw new Error('toolCalls et toolResults doivent avoir la même longueur');
   }
 
-  // Construire le message assistant avec TOUS les tool_calls
   const assistantMessage: ApiMessage = {
     role: 'assistant',
     content: '',
@@ -165,7 +149,6 @@ export async function sendToolResultsToAgent({
     })),
   };
 
-  // Construire un message tool par tool_call
   const toolMessages: ApiMessage[] = toolCalls.map((tc, i) => ({
     role: 'tool',
     content: toolResults[i],
@@ -204,6 +187,50 @@ export async function sendToolResultsToAgent({
     reply: data.reply || '',
     toolCalls: data.toolCalls,
   };
+}
+
+/**
+ * 🆕 Fait juger une réponse de quiz par l'IA (bug #14).
+ */
+export async function judgeAnswer({
+  question,
+  expected,
+  given,
+}: {
+  question: string;
+  expected: string;
+  given: string;
+}): Promise<{
+  correct: boolean;
+  almost: boolean;
+  explanation: string | null;
+}> {
+  try {
+    const response = await fetchWithTimeout(
+      `${API_URL}/judge-answer`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, expected, given }),
+      },
+      10000
+    );
+
+    if (!response.ok) {
+      console.warn('[API] /judge-answer échec:', response.status);
+      return { correct: false, almost: false, explanation: null };
+    }
+
+    const data = await response.json();
+    return {
+      correct: !!data.correct,
+      almost: !!data.almost,
+      explanation: data.explanation || null,
+    };
+  } catch (error) {
+    console.warn('[API] Erreur judgeAnswer:', error);
+    return { correct: false, almost: false, explanation: null };
+  }
 }
 
 /**
