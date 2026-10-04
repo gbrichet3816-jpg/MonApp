@@ -5,6 +5,14 @@ import { initUserTable } from './user';
 const db = SQLite.openDatabaseSync('monapp.db');
 
 export function initDatabase() {
+  // 🆕 Bug #3 : désactiver WAL pour éviter les pertes de messages en kill brutal
+  try {
+    db.execSync('PRAGMA journal_mode = DELETE;');
+    db.execSync('PRAGMA synchronous = FULL;');
+  } catch (e) {
+    console.warn('[DB] Erreur PRAGMA:', e);
+  }
+
   db.execSync(`
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY NOT NULL,
@@ -60,6 +68,15 @@ export function initDatabase() {
   initUserTable();
 }
 
+// 🆕 Bug #3 : checkpoint manuel (à appeler quand l'app passe en arrière-plan)
+export function checkpointDatabase() {
+  try {
+    db.execSync('PRAGMA wal_checkpoint(FULL);');
+  } catch (e) {
+    console.warn('[DB] Checkpoint échoué:', e);
+  }
+}
+
 // ===== MESSAGES =====
 
 export function saveMessage({
@@ -87,7 +104,8 @@ export function loadMessages(agentId: string) {
     is_user: number;
     created_at: number;
   }>(
-    'SELECT * FROM messages WHERE agent_id = ? ORDER BY created_at ASC LIMIT 50',
+    // 🆕 Bug #3 : LIMIT passé de 50 à 100 pour garder plus de contexte
+    'SELECT * FROM messages WHERE agent_id = ? ORDER BY created_at ASC LIMIT 100',
     [agentId],
   );
 
@@ -195,11 +213,9 @@ export function findRemindersToAsk(agentId: string) {
 
   return rows.filter((r) => {
     if (r.reminder_type === 'relative' || r.reminder_type === 'onetime') {
-      // Pour les relatifs et uniques, on vérifie scheduled_at
       return r.scheduled_at !== null && r.scheduled_at <= Date.now() && r.last_fired_at === null;
     }
 
-    // Pour les quotidiens
     const [h, m] = r.time.split(':').map(Number);
     const reminderMinutes = h * 60 + m;
     return reminderMinutes <= currentMinutes && r.last_fired_at === null;

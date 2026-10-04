@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   importBackup,
@@ -33,6 +34,8 @@ export default function SettingsModal({ visible, onClose }: Props) {
   const [notifCount, setNotifCount] = useState<number | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const profile = getLocalProfile();
+  // 🆕 Bug #8 : safe area pour ne pas cacher le bouton Fermer
+  const insets = useSafeAreaInsets();
 
   const testPermission = async () => {
     const granted = await requestNotificationPermission();
@@ -181,7 +184,7 @@ export default function SettingsModal({ visible, onClose }: Props) {
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <View style={styles.panel}>
+        <View style={[styles.panel, { paddingBottom: insets.bottom + Spacing.four }]}>
           <Text style={styles.title}>Paramètres</Text>
 
           <ScrollView style={styles.content}>

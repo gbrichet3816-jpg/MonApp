@@ -1,4 +1,5 @@
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Spacing } from '@/constants/theme';
 
@@ -16,10 +17,13 @@ type Props = {
 };
 
 export default function AgentMenu({ visible, agents, selectedAgentId, onSelectAgent, onClose }: Props) {
+  // 🆕 Bug #4 : safe area pour ne pas cacher le bouton sous la barre système
+  const insets = useSafeAreaInsets();
+
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <View style={styles.panel}>
+        <View style={[styles.panel, { paddingBottom: insets.bottom + Spacing.four }]}>
           <Text style={styles.title}>Choisir un agent</Text>
 
           {agents.length === 0 ? (
@@ -60,7 +64,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: Spacing.four,
     borderTopRightRadius: Spacing.four,
     padding: Spacing.four,
-    paddingBottom: Spacing.five,
   },
   title: {
     fontSize: 20,

@@ -44,6 +44,7 @@
       "expo-sqlite",
       "expo-notifications",
       "expo-sharing",
+      "expo-print",
       "react-native-blob-util"
     ],
     "experiments": {
