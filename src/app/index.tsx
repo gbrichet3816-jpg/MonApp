@@ -133,7 +133,7 @@ function isScheduleQuestion(text: string): boolean {
   return keywords.some((k) => lower.includes(k));
 }
 
-// 🆕 Trouve un tool result qui commence par un préfixe (QUIZ/DICTATION)
+// Trouve un tool result qui commence par un préfixe (QUIZ/DICTATION)
 function findToolResult(toolResults: string[], prefix: string): string | null {
   return toolResults.find((r) => r.startsWith(prefix)) || null;
 }
@@ -810,7 +810,6 @@ export default function HomeScreen() {
             const profile = getLocalProfile();
             const userId = profile?.code ?? 'default';
             await setWeatherCity(profDb, userId, newCity);
-            console.log(`[Prof] Ville mise à jour: ${newCity}`);
           } catch (e) { console.warn('[Prof] update city:', e); }
         }
       }
@@ -846,14 +845,12 @@ export default function HomeScreen() {
         loopCount++;
         console.log(`🔁 Boucle tool calling #${loopCount} — ${currentResult.toolCalls.length} tool(s)`);
 
-        // 🆕 Exécuter TOUS les tools
         const allToolCalls = currentResult.toolCalls;
         const allToolResults: string[] = [];
         for (const tool of allToolCalls) {
           const res = await executeToolCall(tool, selectedAgent.id);
           allToolResults.push(res);
         }
-        console.log(`✅ [DEBUG] ${allToolCalls.length} tool(s) exécuté(s)`);
 
         const newResult = await sendToolResultsToAgent({
           messages: apiMessages,
@@ -865,7 +862,6 @@ export default function HomeScreen() {
 
         console.log(`📥 Réponse boucle #${loopCount}:`, newResult.reply?.substring(0, 50));
 
-        // 🆕 Chercher un quiz parmi TOUS les résultats
         const quizResult = findToolResult(allToolResults, '__QUIZ__:');
         if (quizResult) {
           const jsonStr = quizResult.replace('__QUIZ__:', '');
@@ -899,7 +895,6 @@ export default function HomeScreen() {
           break;
         }
 
-        // 🆕 Chercher une dictée parmi TOUS les résultats
         const dictResult = findToolResult(allToolResults, '__DICTATION__:');
         if (dictResult) {
           const sentences = dictResult.replace('__DICTATION__:', '');
@@ -1025,13 +1020,6 @@ export default function HomeScreen() {
         ];
       } else if (isPdf && pendingFile.base64) {
         const extractResult = await extractPdfText(pendingFile.base64);
-        console.log('📄 PDF extraction:', {
-          success: extractResult.success,
-          textLength: extractResult.text?.length || 0,
-          pages: extractResult.pages,
-          error: extractResult.error,
-          preview: extractResult.text?.substring(0, 300),
-        });
         if (extractResult.success && extractResult.text) {
           const pdfText = extractResult.text.slice(0, 15000);
           content = `${userText}\n\n--- Contenu du PDF "${pendingFile.fileName}" (${extractResult.pages} pages) ---\n\n${pdfText}`;
@@ -1077,7 +1065,6 @@ export default function HomeScreen() {
       while (currentResult.toolCalls && currentResult.toolCalls.length > 0 && loopCount < MAX_LOOPS) {
         loopCount++;
 
-        // 🆕 Exécuter TOUS les tools
         const allToolCalls = currentResult.toolCalls;
         const allToolResults: string[] = [];
         for (const tool of allToolCalls) {
