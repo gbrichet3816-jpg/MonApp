@@ -243,17 +243,11 @@ export async function addProfPoints(db: SQLite.SQLiteDatabase, userId: string, d
 // 🆕 TTS (Supertonic-3)
 // ============================================================
 
-/**
- * Vérifie si le modèle TTS a été téléchargé.
- */
 export async function isTtsDownloaded(db: SQLite.SQLiteDatabase, userId: string): Promise<boolean> {
   const profile = await getProfProfile(db, userId);
   return profile?.tts_downloaded === 1;
 }
 
-/**
- * Marque le modèle TTS comme téléchargé.
- */
 export async function setTtsDownloaded(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   await db.runAsync(
     `UPDATE prof_profile SET tts_downloaded = 1, updated_at = ? WHERE user_id = ?`,
@@ -554,23 +548,29 @@ export async function getProfState(db: SQLite.SQLiteDatabase, userId: string): P
 
   if (!state) {
     const now = Date.now();
-    await db.runAsync(`INSERT INTO prof_state (user_id, updated_at) VALUES (?, ?)`, [userId, now]);
-    state = {
-      user_id: userId,
-      last_review_offer_at: null,
-      last_morning_briefing_at: null,
-      morning_briefing_hour: 7,
-      morning_briefing_minute: 30,
-      morning_briefing_enabled: 0,
-      morning_briefing_notification_id: null,
-      last_evening_briefing_at: null,
-      evening_briefing_hour: 18,
-      evening_briefing_minute: 30,
-      evening_briefing_enabled: 0,
-      evening_briefing_notification_id: null,
-      last_weather_refusal_prompt_at: null,
-      updated_at: now,
-    };
+    // 🆕 Fix bug #11 : INSERT OR IGNORE pour éviter UNIQUE constraint en cas de race condition
+    await db.runAsync(`INSERT OR IGNORE INTO prof_state (user_id, updated_at) VALUES (?, ?)`, [userId, now]);
+    // On relit après l'insert pour avoir l'état réel (au cas où un autre process l'a créé)
+    state = await db.getFirstAsync<ProfState>('SELECT * FROM prof_state WHERE user_id = ?', [userId]);
+    if (!state) {
+      // Fallback si vraiment rien (ne devrait pas arriver)
+      state = {
+        user_id: userId,
+        last_review_offer_at: null,
+        last_morning_briefing_at: null,
+        morning_briefing_hour: 7,
+        morning_briefing_minute: 30,
+        morning_briefing_enabled: 0,
+        morning_briefing_notification_id: null,
+        last_evening_briefing_at: null,
+        evening_briefing_hour: 18,
+        evening_briefing_minute: 30,
+        evening_briefing_enabled: 0,
+        evening_briefing_notification_id: null,
+        last_weather_refusal_prompt_at: null,
+        updated_at: now,
+      };
+    }
   }
 
   return state;

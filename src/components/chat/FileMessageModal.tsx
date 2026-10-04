@@ -2,15 +2,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import {
   Image,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Spacing } from '@/constants/theme';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
@@ -33,6 +32,9 @@ export default function FileMessageModal({
 }: Props) {
   const [message, setMessage] = useState('');
   const [action, setAction] = useState<FileAction>('agent');
+
+  const insets = useSafeAreaInsets();
+  const safeBottom = Math.max(insets.bottom, 80);
 
   const { isListening, start, stop, cancel } = useSpeechRecognition({
     onResult: (transcript) => {
@@ -87,14 +89,18 @@ export default function FileMessageModal({
       transparent
       onRequestClose={handleCancel}
     >
-      <KeyboardAvoidingView
-        style={styles.overlay}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <View style={styles.panel}>
-          <Text style={styles.title}>
-            {isImage ? '🖼️ Image prête' : '📄 Fichier prêt'}
-          </Text>
+      <View style={styles.overlay}>
+        <View style={[styles.panel, { paddingBottom: safeBottom }]}>
+          {/* 🆕 Barre du haut avec bouton Fermer */}
+          <View style={styles.topBar}>
+            <TouchableOpacity style={styles.topBarClose} onPress={handleCancel}>
+              <Ionicons name="close" size={28} color={Colors.light.text} />
+            </TouchableOpacity>
+            <Text style={styles.topBarTitle}>
+              {isImage ? '🖼️ TEST IMAGE' : '📄 TEST FICHIER'}
+            </Text>
+            <View style={{ width: 28 }} />
+          </View>
 
           {isImage ? (
             <Image source={{ uri: file.uri }} style={styles.preview} resizeMode="contain" />
@@ -183,12 +189,8 @@ export default function FileMessageModal({
             <Ionicons name="checkmark-circle" size={20} color={Colors.light.background} />
             <Text style={styles.sendText}>Valider</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
-            <Text style={styles.cancelText}>Annuler</Text>
-          </TouchableOpacity>
         </View>
-      </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
@@ -204,14 +206,23 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: Spacing.four,
     borderTopRightRadius: Spacing.four,
     padding: Spacing.four,
-    paddingBottom: Spacing.five,
+    maxHeight: '90%',
   },
-  title: {
-    fontSize: 20,
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.three,
+  },
+  topBarClose: {
+    padding: Spacing.one,
+  },
+  topBarTitle: {
+    fontSize: 18,
     fontWeight: '700',
     color: Colors.light.text,
     textAlign: 'center',
-    marginBottom: Spacing.three,
+    flex: 1,
   },
   preview: {
     width: '100%',
@@ -312,14 +323,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: Colors.light.background,
-  },
-  cancelButton: {
-    paddingVertical: Spacing.two,
-    alignItems: 'center',
-    marginTop: Spacing.two,
-  },
-  cancelText: {
-    fontSize: 14,
-    color: Colors.light.textSecondary,
   },
 });

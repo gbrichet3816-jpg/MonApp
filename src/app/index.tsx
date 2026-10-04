@@ -77,7 +77,7 @@ import {
   ApiMessage,
   extractPdfText,
   sendMessageToAgent,
-  sendToolResultToAgent,
+  sendToolResultsToAgent,
   ToolCall,
 } from '@/config/api';
 import {
@@ -131,6 +131,11 @@ function isScheduleQuestion(text: string): boolean {
     'matière demain', 'matiere demain', 'cette semaine',
   ];
   return keywords.some((k) => lower.includes(k));
+}
+
+// 🆕 Trouve un tool result qui commence par un préfixe (QUIZ/DICTATION)
+function findToolResult(toolResults: string[], prefix: string): string | null {
+  return toolResults.find((r) => r.startsWith(prefix)) || null;
 }
 
 // ============================================================
@@ -440,9 +445,7 @@ export default function HomeScreen() {
         const title = args.title || 'Quiz';
         const questions = args.questions || [];
         if (!questions.length) return 'Aucune question fournie.';
-        const result = `__QUIZ__:${JSON.stringify({ title, questions })}`;
-        console.log('✅ [DEBUG] Quiz sérialisé:', result.substring(0, 100));
-        return result;
+        return `__QUIZ__:${JSON.stringify({ title, questions })}`;
       }
 
       if (call.name === 'startDictation') {
@@ -841,34 +844,36 @@ export default function HomeScreen() {
         loopCount < MAX_LOOPS
       ) {
         loopCount++;
-        console.log(`🔁 Boucle tool calling #${loopCount}`);
+        console.log(`🔁 Boucle tool calling #${loopCount} — ${currentResult.toolCalls.length} tool(s)`);
 
-        const firstTool = currentResult.toolCalls[0];
-        const toolResult = await executeToolCall(firstTool, selectedAgent.id);
+        // 🆕 Exécuter TOUS les tools
+        const allToolCalls = currentResult.toolCalls;
+        const allToolResults: string[] = [];
+        for (const tool of allToolCalls) {
+          const res = await executeToolCall(tool, selectedAgent.id);
+          allToolResults.push(res);
+        }
+        console.log(`✅ [DEBUG] ${allToolCalls.length} tool(s) exécuté(s)`);
 
-        console.log('🔍 [DEBUG] toolResult complet:', toolResult);
-        console.log('🔍 [DEBUG] Est un QUIZ ?', toolResult.startsWith('__QUIZ__:'));
-
-        const newResult = await sendToolResultToAgent({
+        const newResult = await sendToolResultsToAgent({
           messages: apiMessages,
-          toolCall: firstTool,
-          toolResult: toolResult,
+          toolCalls: allToolCalls,
+          toolResults: allToolResults,
           agentSystemPrompt: systemPrompt,
           agentId: selectedAgent.id,
         });
 
         console.log(`📥 Réponse boucle #${loopCount}:`, newResult.reply?.substring(0, 50));
 
-        if (toolResult.startsWith('__QUIZ__:')) {
-          const jsonStr = toolResult.replace('__QUIZ__:', '');
-          console.log('🔍 [DEBUG] JSON quiz à parser:', jsonStr);
+        // 🆕 Chercher un quiz parmi TOUS les résultats
+        const quizResult = findToolResult(allToolResults, '__QUIZ__:');
+        if (quizResult) {
+          const jsonStr = quizResult.replace('__QUIZ__:', '');
           let quizData: { title: string; questions: any[] } | null = null;
           try {
             quizData = JSON.parse(jsonStr);
-            console.log('✅ [DEBUG] Quiz parsé:', quizData);
           } catch (e) {
-            console.warn('❌ [DEBUG] Erreur parsing quiz:', e);
-            console.warn('❌ [DEBUG] JSON problématique:', jsonStr);
+            console.warn('[Prof] Erreur parsing quiz:', e);
           }
 
           if (quizData) {
@@ -883,7 +888,6 @@ export default function HomeScreen() {
             setMessages((prev) => [...prev, quizMessage]);
             saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
             messageAlreadyDisplayed = true;
-            console.log('✅ [DEBUG] Message quiz affiché');
           }
 
           if (newResult.reply && newResult.reply.trim().length > 0) {
@@ -895,8 +899,10 @@ export default function HomeScreen() {
           break;
         }
 
-        if (toolResult.startsWith('__DICTATION__:')) {
-          const sentences = toolResult.replace('__DICTATION__:', '');
+        // 🆕 Chercher une dictée parmi TOUS les résultats
+        const dictResult = findToolResult(allToolResults, '__DICTATION__:');
+        if (dictResult) {
+          const sentences = dictResult.replace('__DICTATION__:', '');
           const dictationMessage: ChatMessage = {
             id: `agent-dictation-${Date.now()}`,
             text: sentences,
@@ -1070,26 +1076,28 @@ export default function HomeScreen() {
 
       while (currentResult.toolCalls && currentResult.toolCalls.length > 0 && loopCount < MAX_LOOPS) {
         loopCount++;
-        const firstTool = currentResult.toolCalls[0];
-        const toolResult = await executeToolCall(firstTool, selectedAgent.id);
 
-        console.log('🔍 [DEBUG] toolResult (file) complet:', toolResult);
-        console.log('🔍 [DEBUG] Est un QUIZ ? (file)', toolResult.startsWith('__QUIZ__:'));
+        // 🆕 Exécuter TOUS les tools
+        const allToolCalls = currentResult.toolCalls;
+        const allToolResults: string[] = [];
+        for (const tool of allToolCalls) {
+          const res = await executeToolCall(tool, selectedAgent.id);
+          allToolResults.push(res);
+        }
 
-        const newResult = await sendToolResultToAgent({
+        const newResult = await sendToolResultsToAgent({
           messages: apiMessages,
-          toolCall: firstTool,
-          toolResult,
+          toolCalls: allToolCalls,
+          toolResults: allToolResults,
           agentSystemPrompt: systemPromptWithDate,
           agentId: selectedAgent.id,
         });
 
-        if (toolResult.startsWith('__QUIZ__:')) {
-          const jsonStr = toolResult.replace('__QUIZ__:', '');
-          console.log('🔍 [DEBUG] JSON quiz (file) à parser:', jsonStr);
+        const quizResult = findToolResult(allToolResults, '__QUIZ__:');
+        if (quizResult) {
+          const jsonStr = quizResult.replace('__QUIZ__:', '');
           try {
             const quizData = JSON.parse(jsonStr);
-            console.log('✅ [DEBUG] Quiz (file) parsé:', quizData);
             const quizMessage: ChatMessage = {
               id: `agent-quiz-${Date.now()}`,
               text: '',
@@ -1101,9 +1109,7 @@ export default function HomeScreen() {
             setMessages((prev) => [...prev, quizMessage]);
             saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
             messageAlreadyDisplayed = true;
-          } catch (e) {
-            console.warn('❌ [DEBUG] Parsing quiz (file):', e);
-          }
+          } catch (e) { console.warn('[Prof] Parsing quiz:', e); }
           if (newResult.reply && newResult.reply.trim().length > 0) {
             const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
             setMessages((prev) => [...prev, finalMessage]);
@@ -1113,8 +1119,9 @@ export default function HomeScreen() {
           break;
         }
 
-        if (toolResult.startsWith('__DICTATION__:')) {
-          const sentences = toolResult.replace('__DICTATION__:', '');
+        const dictResult = findToolResult(allToolResults, '__DICTATION__:');
+        if (dictResult) {
+          const sentences = dictResult.replace('__DICTATION__:', '');
           const dictationMessage: ChatMessage = {
             id: `agent-dictation-${Date.now()}`,
             text: sentences,
@@ -1257,26 +1264,27 @@ export default function HomeScreen() {
 
       while (currentResult.toolCalls && currentResult.toolCalls.length > 0 && loopCount < MAX_LOOPS) {
         loopCount++;
-        const firstTool = currentResult.toolCalls[0];
-        const toolResult = await executeToolCall(firstTool, selectedAgent.id);
 
-        console.log('🔍 [DEBUG] toolResult (photo) complet:', toolResult);
-        console.log('🔍 [DEBUG] Est un QUIZ ? (photo)', toolResult.startsWith('__QUIZ__:'));
+        const allToolCalls = currentResult.toolCalls;
+        const allToolResults: string[] = [];
+        for (const tool of allToolCalls) {
+          const res = await executeToolCall(tool, selectedAgent.id);
+          allToolResults.push(res);
+        }
 
-        const newResult = await sendToolResultToAgent({
+        const newResult = await sendToolResultsToAgent({
           messages: apiMessages,
-          toolCall: firstTool,
-          toolResult,
+          toolCalls: allToolCalls,
+          toolResults: allToolResults,
           agentSystemPrompt: systemPromptWithDate,
           agentId: selectedAgent.id,
         });
 
-        if (toolResult.startsWith('__QUIZ__:')) {
-          const jsonStr = toolResult.replace('__QUIZ__:', '');
-          console.log('🔍 [DEBUG] JSON quiz (photo) à parser:', jsonStr);
+        const quizResult = findToolResult(allToolResults, '__QUIZ__:');
+        if (quizResult) {
+          const jsonStr = quizResult.replace('__QUIZ__:', '');
           try {
             const quizData = JSON.parse(jsonStr);
-            console.log('✅ [DEBUG] Quiz (photo) parsé:', quizData);
             const quizMessage: ChatMessage = {
               id: `agent-quiz-${Date.now()}`,
               text: '',
@@ -1288,9 +1296,7 @@ export default function HomeScreen() {
             setMessages((prev) => [...prev, quizMessage]);
             saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
             messageAlreadyDisplayed = true;
-          } catch (e) {
-            console.warn('❌ [DEBUG] Parsing quiz (photo):', e);
-          }
+          } catch (e) { console.warn('[Prof] Parsing quiz:', e); }
           if (newResult.reply && newResult.reply.trim().length > 0) {
             const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
             setMessages((prev) => [...prev, finalMessage]);
@@ -1300,8 +1306,9 @@ export default function HomeScreen() {
           break;
         }
 
-        if (toolResult.startsWith('__DICTATION__:')) {
-          const sentences = toolResult.replace('__DICTATION__:', '');
+        const dictResult = findToolResult(allToolResults, '__DICTATION__:');
+        if (dictResult) {
+          const sentences = dictResult.replace('__DICTATION__:', '');
           const dictationMessage: ChatMessage = {
             id: `agent-dictation-${Date.now()}`,
             text: sentences,

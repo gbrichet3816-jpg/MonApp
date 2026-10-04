@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Spacing } from '@/constants/theme';
 
@@ -13,11 +14,22 @@ type Props = {
 };
 
 export default function FileActionMenu({ visible, fileName, onClose, onAction }: Props) {
+  // 🆕 SafeArea renforcé
+  const insets = useSafeAreaInsets();
+  const safeBottom = Math.max(insets.bottom, 80);
+
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <View style={styles.panel}>
-          <Text style={styles.title}>Que veux-tu faire ?</Text>
+        <View style={[styles.panel, { paddingBottom: safeBottom }]}>
+          {/* 🆕 Barre du haut avec bouton Fermer (X) */}
+          <View style={styles.topBar}>
+            <TouchableOpacity style={styles.topBarClose} onPress={onClose}>
+              <Ionicons name="close" size={28} color={Colors.light.text} />
+            </TouchableOpacity>
+            <Text style={styles.topBarTitle}>Que veux-tu faire ?</Text>
+            <View style={{ width: 28 }} />
+          </View>
           <Text style={styles.fileName} numberOfLines={1}>
             {fileName}
           </Text>
@@ -45,10 +57,6 @@ export default function FileActionMenu({ visible, fileName, onClose, onAction }:
               <Text style={styles.optionHint}>Sauvegarde sur ton téléphone</Text>
             </View>
           </TouchableOpacity>
-
-          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-            <Text style={styles.closeText}>Annuler</Text>
-          </TouchableOpacity>
         </View>
       </View>
     </Modal>
@@ -66,18 +74,28 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: Spacing.four,
     borderTopRightRadius: Spacing.four,
     padding: Spacing.four,
+    maxHeight: '90%',
   },
-  title: {
-    fontSize: 20,
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.two,
+  },
+  topBarClose: {
+    padding: Spacing.one,
+  },
+  topBarTitle: {
+    fontSize: 18,
     fontWeight: '700',
     color: Colors.light.text,
     textAlign: 'center',
+    flex: 1,
   },
   fileName: {
     fontSize: 13,
     color: Colors.light.textSecondary,
     textAlign: 'center',
-    marginTop: Spacing.half,
     marginBottom: Spacing.three,
     fontStyle: 'italic',
   },
@@ -101,14 +119,4 @@ const styles = StyleSheet.create({
     color: Colors.light.textSecondary,
     marginTop: 2,
   },
-  closeButton: {
-    marginTop: Spacing.two,
-    paddingVertical: Spacing.three,
-    alignItems: 'center',
-  },
-  closeText: {
-    fontSize: 16,
-    color: Colors.light.textSecondary,
-    fontWeight: '600',
-  },
-});
+})

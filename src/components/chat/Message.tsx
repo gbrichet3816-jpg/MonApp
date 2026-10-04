@@ -30,6 +30,21 @@ type Props = {
   onQuizAnswer?: (questionIndex: number, userAnswer: string) => void;
 };
 
+// 🆕 Nettoyage des balises internes DeepSeek (<||DSML||> etc.)
+function cleanDsmlTags(text: string): string {
+  if (!text) return '';
+  return text
+    // Balises <||DSML||> ... </||DSML||>
+    .replace(/<+\|+\|?\s*DSML\s*\|?\|+>+/gi, '')
+    .replace(/<\/+\|+\|?\s*DSML\s*\|?\|+>+/gi, '')
+    // Balises <||...||> génériques
+    .replace(/<\|[^|>]+\|>/g, '')
+    // Nettoyer les espaces multiples et sauts de ligne en trop
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
 export default function Message({
   text,
   isUser,
@@ -128,7 +143,6 @@ export default function Message({
     }
   }, [error]);
 
-  // Lecture normale — voix système
   const handleSpeak = async () => {
     if (isPlaying) {
       stopSpeaking();
@@ -452,10 +466,12 @@ export default function Message({
   // ============================================================
   // MODE MESSAGE NORMAL
   // ============================================================
+  const cleanedText = isUser ? text : cleanDsmlTags(text);
+
   return (
     <View style={[styles.container, isUser ? styles.userContainer : styles.agentContainer]}>
       <View style={[styles.bubble, isUser ? styles.userBubble : styles.agentBubble]}>
-        <Text style={[styles.text, isUser ? styles.userText : styles.agentText]}>{text}</Text>
+        <Text style={[styles.text, isUser ? styles.userText : styles.agentText]}>{cleanedText}</Text>
 
         {!isUser && (
           <TouchableOpacity style={styles.speakButton} onPress={handleSpeak}>
@@ -483,7 +499,6 @@ const styles = StyleSheet.create({
   agentText: { color: Colors.light.text },
   speakButton: { marginTop: Spacing.two, alignSelf: 'flex-start' },
 
-  // DICTÉE
   dictationBubble: { backgroundColor: '#FFF8E1', borderWidth: 2, borderColor: Colors.light.primary, borderStyle: 'dashed', minWidth: 260 },
   dictationHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.two, gap: Spacing.one },
   dictationLabel: { fontSize: 12, fontWeight: '700', color: Colors.light.primary, textTransform: 'uppercase', letterSpacing: 0.5 },
@@ -504,7 +519,6 @@ const styles = StyleSheet.create({
   dictationRevealedText: { fontSize: 15, color: Colors.light.text, lineHeight: 22, marginBottom: Spacing.one },
   dictationRevealedTextActive: { fontWeight: '700', color: Colors.light.primary },
 
-  // QUIZ
   quizBubble: { backgroundColor: '#E8F5E9', borderWidth: 2, borderColor: '#2E7D32', minWidth: 280 },
   quizFinishedBubble: { backgroundColor: '#FFF3E0', borderColor: '#FFB300' },
   quizFinishedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#2E7D32', paddingHorizontal: Spacing.two, paddingVertical: 2, borderRadius: Spacing.one, marginLeft: 'auto' },

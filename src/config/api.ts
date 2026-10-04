@@ -104,9 +104,8 @@ export async function sendMessageToAgent({
 }
 
 /**
- * 🆕 Envoie le résultat d'un tool call à Prof (2ème appel).
- * Respecte le format OpenAI/DeepSeek :
- *   [user] → [assistant with tool_calls] → [tool with result]
+ * Envoie le résultat d'UN tool call à Prof (2ème appel).
+ * ⚠️ Conservé pour compatibilité — préférer sendToolResultsToAgent (pluriel).
  */
 export async function sendToolResultToAgent({
   messages,
@@ -121,35 +120,63 @@ export async function sendToolResultToAgent({
   agentSystemPrompt?: string;
   agentId?: string;
 }): Promise<AgentReply> {
-  // Construire le message assistant avec le tool_call
+  return sendToolResultsToAgent({
+    messages,
+    toolCalls: [toolCall],
+    toolResults: [toolResult],
+    agentSystemPrompt,
+    agentId,
+  });
+}
+
+/**
+ * 🆕 Envoie les résultats de PLUSIEURS tool calls en un seul appel.
+ * Respecte le format OpenAI/DeepSeek :
+ *   [user] → [assistant with N tool_calls] → [N tools with results]
+ */
+export async function sendToolResultsToAgent({
+  messages,
+  toolCalls,
+  toolResults,
+  agentSystemPrompt,
+  agentId,
+}: {
+  messages: ApiMessage[];
+  toolCalls: ToolCall[];
+  toolResults: string[];
+  agentSystemPrompt?: string;
+  agentId?: string;
+}): Promise<AgentReply> {
+  if (toolCalls.length !== toolResults.length) {
+    throw new Error('toolCalls et toolResults doivent avoir la même longueur');
+  }
+
+  // Construire le message assistant avec TOUS les tool_calls
   const assistantMessage: ApiMessage = {
     role: 'assistant',
     content: '',
-    tool_calls: [
-      {
-        id: toolCall.id,
-        type: 'function',
-        function: {
-          name: toolCall.name,
-          arguments: JSON.stringify(toolCall.arguments || {}),
-        },
+    tool_calls: toolCalls.map((tc) => ({
+      id: tc.id,
+      type: 'function',
+      function: {
+        name: tc.name,
+        arguments: JSON.stringify(tc.arguments || {}),
       },
-    ],
+    })),
   };
 
-  // Construire le message tool avec le résultat
-  const toolMessage: ApiMessage = {
+  // Construire un message tool par tool_call
+  const toolMessages: ApiMessage[] = toolCalls.map((tc, i) => ({
     role: 'tool',
-    content: toolResult,
-    tool_call_id: toolCall.id,
-  };
+    content: toolResults[i],
+    tool_call_id: tc.id,
+  }));
 
-  const fullMessages = [...messages, assistantMessage, toolMessage];
+  const fullMessages = [...messages, assistantMessage, ...toolMessages];
 
-  console.log('[API] Envoi avec tool result:', {
-    toolName: toolCall.name,
-    toolId: toolCall.id,
-    resultLength: toolResult.length,
+  console.log('[API] Envoi avec tool results:', {
+    count: toolCalls.length,
+    toolNames: toolCalls.map((tc) => tc.name),
   });
 
   const response = await fetchWithTimeout(`${API_URL}/chat`, {
@@ -160,14 +187,14 @@ export async function sendToolResultToAgent({
     body: JSON.stringify({
       messages: fullMessages,
       agentSystemPrompt,
-      enableTools: false, // Désactiver les tools pour forcer une réponse en texte
+      enableTools: false,
       agentId,
     }),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.warn('[API] Erreur tool result:', response.status, errorText);
+    console.warn('[API] Erreur tool results:', response.status, errorText);
     throw new Error(`Erreur serveur : ${response.status} - ${errorText}`);
   }
 

@@ -3,6 +3,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Colors, Spacing } from '@/constants/theme';
 
@@ -15,9 +16,6 @@ export type ImportedFile = {
   title: string;
 };
 
-/**
- * Action choisie par l'utilisateur quand il envoie un fichier.
- */
 export type FileAction = 'agent' | 'save' | 'agent+save';
 
 type Props = {
@@ -27,6 +25,10 @@ type Props = {
 };
 
 export default function FileImporter({ visible, onClose, onFilePicked }: Props) {
+  // 🆕 SafeArea renforcé pour ne pas cacher le bouton Annuler
+  const insets = useSafeAreaInsets();
+  const safeBottom = Math.max(insets.bottom, 80);
+
   const handleGallery = async () => {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -111,8 +113,15 @@ export default function FileImporter({ visible, onClose, onFilePicked }: Props) 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <View style={styles.panel}>
-          <Text style={styles.title}>Ajouter un fichier</Text>
+        <View style={[styles.panel, { paddingBottom: safeBottom }]}>
+          {/* 🆕 Barre du haut avec bouton Fermer (X) */}
+          <View style={styles.topBar}>
+            <TouchableOpacity style={styles.topBarClose} onPress={onClose}>
+              <Ionicons name="close" size={28} color={Colors.light.text} />
+            </TouchableOpacity>
+            <Text style={styles.topBarTitle}>Ajouter un fichier</Text>
+            <View style={{ width: 28 }} />
+          </View>
 
           <TouchableOpacity style={styles.option} onPress={handleGallery}>
             <Ionicons name="images" size={26} color={Colors.light.primary} />
@@ -127,10 +136,6 @@ export default function FileImporter({ visible, onClose, onFilePicked }: Props) 
           <Text style={styles.hint}>
             Formats supportés : PDF, images, texte (.txt, .md, .csv, .json)
           </Text>
-
-          <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-            <Text style={styles.closeText}>Annuler</Text>
-          </TouchableOpacity>
         </View>
       </View>
     </Modal>
@@ -148,13 +153,23 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: Spacing.four,
     borderTopRightRadius: Spacing.four,
     padding: Spacing.four,
+    maxHeight: '90%',
   },
-  title: {
-    fontSize: 20,
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Spacing.three,
+  },
+  topBarClose: {
+    padding: Spacing.one,
+  },
+  topBarTitle: {
+    fontSize: 18,
     fontWeight: '700',
     color: Colors.light.text,
-    marginBottom: Spacing.three,
     textAlign: 'center',
+    flex: 1,
   },
   option: {
     flexDirection: 'row',
@@ -176,15 +191,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: Spacing.two,
     fontStyle: 'italic',
-  },
-  closeButton: {
-    marginTop: Spacing.two,
-    paddingVertical: Spacing.three,
-    alignItems: 'center',
-  },
-  closeText: {
-    fontSize: 16,
-    color: Colors.light.textSecondary,
-    fontWeight: '600',
   },
 });

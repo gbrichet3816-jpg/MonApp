@@ -24,16 +24,14 @@ type Props = {
 export default function MessageList({ messages, emptyText, onQuizAnswer }: Props) {
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
-  // 🆕 Bug #2 : filtrer les messages "techniques" qui ne doivent pas apparaître dans le chat
+  // 🆕 Bug #2 : filtrer les messages techniques
   const visibleMessages = messages.filter((msg) => {
+    // ✅ Les messages quiz/dictée passent TOUJOURS en premier (avant le check texte vide)
+    if (msg.isQuiz) return true;
+    if (msg.isDictation) return true;
+
     // Ignore les messages dont le texte est vide
     if (!msg.text || !msg.text.trim()) return false;
-
-    // Ignore les messages quiz (ils sont rendus par isQuiz=true, pas par le texte)
-    if (msg.isQuiz) return true;
-
-    // Ignore les messages dictée (rendus par isDictation=true)
-    if (msg.isDictation) return true;
 
     // Ignore les marqueurs techniques internes
     if (msg.text.startsWith('__QUIZ__:') || msg.text.startsWith('__DICTATION__:')) {
