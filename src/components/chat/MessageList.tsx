@@ -24,15 +24,37 @@ type Props = {
 export default function MessageList({ messages, emptyText, onQuizAnswer }: Props) {
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
+  // 🆕 Bug #2 : filtrer les messages "techniques" qui ne doivent pas apparaître dans le chat
+  const visibleMessages = messages.filter((msg) => {
+    // Ignore les messages dont le texte est vide
+    if (!msg.text || !msg.text.trim()) return false;
+
+    // Ignore les messages quiz (ils sont rendus par isQuiz=true, pas par le texte)
+    if (msg.isQuiz) return true;
+
+    // Ignore les messages dictée (rendus par isDictation=true)
+    if (msg.isDictation) return true;
+
+    // Ignore les marqueurs techniques internes
+    if (msg.text.startsWith('__QUIZ__:') || msg.text.startsWith('__DICTATION__:')) {
+      return false;
+    }
+
+    // Ignore les messages de type "[QUIZ] ..." (marqueurs de sauvegarde)
+    if (msg.text.startsWith('[QUIZ] ')) return false;
+
+    return true;
+  });
+
   useEffect(() => {
-    if (messages.length > 0) {
+    if (visibleMessages.length > 0) {
       setTimeout(() => {
         listRef.current?.scrollToEnd({ animated: true });
       }, 100);
     }
-  }, [messages.length]);
+  }, [visibleMessages.length]);
 
-  if (messages.length === 0) {
+  if (visibleMessages.length === 0) {
     return (
       <View style={styles.emptyContainer}>
         <Text style={styles.emptyText}>{emptyText}</Text>
@@ -43,7 +65,7 @@ export default function MessageList({ messages, emptyText, onQuizAnswer }: Props
   return (
     <FlatList
       ref={listRef}
-      data={messages}
+      data={visibleMessages}
       keyExtractor={(item) => item.id}
       renderItem={({ item }) => (
         <Message

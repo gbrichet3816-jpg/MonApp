@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
+import { Alert, AppState, KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AGENTS } from '@/agents';
@@ -81,6 +81,7 @@ import {
   ToolCall,
 } from '@/config/api';
 import {
+  checkpointDatabase,
   deactivateAllReminders,
   deactivateRemindersByName,
   findRemindersToAsk,
@@ -158,6 +159,16 @@ export default function HomeScreen() {
     if (!profile) setNeedsOnboarding(true);
     setProfileReady(true);
     return () => { isMounted.current = false; };
+  }, []);
+
+  // 🆕 Bug #3 : checkpoint SQLite quand l'app passe en arrière-plan
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'background' || nextState === 'inactive') {
+        checkpointDatabase();
+      }
+    });
+    return () => subscription.remove();
   }, []);
 
   useEffect(() => {
@@ -711,7 +722,7 @@ export default function HomeScreen() {
     try {
       let systemPrompt = selectedAgent.systemPrompt;
 
-      // 🆕 Injection du contexte temporel (bug #10)
+      // 🆕 Bug #10 : injection du contexte temporel
       systemPrompt = `${systemPrompt}\n\n${getDateContext()}`;
 
       if (selectedAgent.id === 'prof' && isBilanRequest(text)) {
@@ -1035,7 +1046,7 @@ export default function HomeScreen() {
         { role: 'user', content },
       ];
 
-      // 🆕 Injection du contexte temporel (bug #10)
+      // 🆕 Bug #10
       const systemPromptWithDate = `${selectedAgent.systemPrompt}\n\n${getDateContext()}`;
 
       const result = await sendMessageToAgent({
@@ -1215,7 +1226,7 @@ export default function HomeScreen() {
         { role: 'user', content },
       ];
 
-      // 🆕 Injection du contexte temporel (bug #10)
+      // 🆕 Bug #10
       const systemPromptWithDate = `${selectedAgent.systemPrompt}\n\n${getDateContext()}`;
 
       const result = await sendMessageToAgent({
@@ -1362,7 +1373,7 @@ export default function HomeScreen() {
       const congratsPrompt = `[SYSTEME] L'enfant vient de terminer le quiz "${quizTitle}" avec un score de ${correct}/${total}. Félicite-le chaleureusement, commente son score (sans juger), et propose-lui soit un nouveau quiz sur un autre thème, soit une autre activité (dictée, révision, exercice). Sois bref et chaleureux.`;
 
       try {
-        // 🆕 Injection du contexte temporel (bug #10)
+        // 🆕 Bug #10
         const systemPromptWithDate = `${selectedAgent.systemPrompt}\n\n${getDateContext()}`;
 
         const result = await sendMessageToAgent({
