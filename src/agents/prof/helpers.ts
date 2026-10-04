@@ -8,6 +8,62 @@ import {
 } from './database';
 
 // ============================================================
+// CONTEXTE TEMPOREL (🆕 bug #10)
+// ============================================================
+
+/**
+ * Retourne un bloc de contexte avec la date et l'heure actuelles.
+ * À injecter dans le prompt système de Prof pour qu'il connaisse "aujourd'hui".
+ */
+export function getDateContext(): string {
+  const now = new Date();
+
+  const dateStr = now.toLocaleDateString('fr-FR', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  const timeStr = now.toLocaleTimeString('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  const isoDate = now.toISOString().slice(0, 10);
+
+  // Calcul de quelques repères utiles
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toLocaleDateString('fr-FR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  });
+
+  const inOneWeek = new Date(now);
+  inOneWeek.setDate(inOneWeek.getDate() + 7);
+  const inOneWeekStr = inOneWeek.toLocaleDateString('fr-FR', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  });
+
+  return `## CONTEXTE TEMPOREL
+
+Nous sommes le **${dateStr}**, il est **${timeStr}**.
+Date au format ISO : ${isoDate}
+Demain : ${tomorrowStr}
+Dans 7 jours : ${inOneWeekStr}
+
+Utilise TOUJOURS cette date comme référence pour :
+- Calculer les délais ("dans 3 jours", "la semaine prochaine")
+- Situer les événements de l'agenda
+- Adapter tes rappels et briefings
+- Reformuler les dates relatives des messages de l'enfant`;
+}
+
+// ============================================================
 // BILAN
 // ============================================================
 
@@ -29,9 +85,6 @@ export function isBilanRequest(text: string): boolean {
   return keywords.some((k) => lower.includes(k));
 }
 
-/**
- * Détecte si un message demande un bilan des NOTES.
- */
 export function isGradesRequest(text: string): boolean {
   const lower = text.toLowerCase();
   const keywords = [
@@ -54,14 +107,9 @@ export function isGradesRequest(text: string): boolean {
   return keywords.some((k) => lower.includes(k));
 }
 
-/**
- * Détecte si un message contient une note.
- * Retourne { grade, gradeMax } si trouvé, null sinon.
- */
 export function extractGradeFromMessage(
   text: string
 ): { grade: number; gradeMax: number } | null {
-  // Pattern "X/Y" ou "X / Y"
   const slashPattern = /(\d+(?:[.,]\d+)?)\s*\/\s*(\d+(?:[.,]\d+)?)/;
   const slashMatch = text.match(slashPattern);
   if (slashMatch) {
@@ -72,7 +120,6 @@ export function extractGradeFromMessage(
     }
   }
 
-  // Pattern "X sur Y"
   const surPattern = /(\d+(?:[.,]\d+)?)\s+sur\s+(\d+(?:[.,]\d+)?)/i;
   const surMatch = text.match(surPattern);
   if (surMatch) {
@@ -86,9 +133,6 @@ export function extractGradeFromMessage(
   return null;
 }
 
-/**
- * Extrait une matière probable dans un message de note.
- */
 export function extractSubjectFromGradeMessage(text: string): string | null {
   const lower = text.toLowerCase();
   const subjects = [
@@ -123,9 +167,6 @@ export function extractSubjectFromGradeMessage(text: string): string | null {
   return null;
 }
 
-/**
- * Formate les contrôles en attente de note pour injection dans le prompt.
- */
 export function formatPendingGradesContext(
   events: ProfEvent[],
   detectedGrade?: { grade: number; gradeMax: number } | null

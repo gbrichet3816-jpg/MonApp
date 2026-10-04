@@ -39,6 +39,7 @@ import {
   formatScheduleForPrompt,
   formatTopicsForPrompt,
   formatTopicsToReview,
+  getDateContext,
   isBilanRequest,
   isGradesRequest,
 } from '@/agents/prof/helpers';
@@ -138,7 +139,6 @@ function isScheduleQuestion(text: string): boolean {
 export default function HomeScreen() {
   const [agentMenuVisible, setAgentMenuVisible] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
-  // 🆕 Prof par défaut à l'ouverture
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>('prof');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -313,7 +313,7 @@ export default function HomeScreen() {
         fragileTopics,
         pendingGrades
       );
-      const enrichedPrompt = `${EVENING_BRIEFING_PROMPT}\n\n${eveningData}`;
+      const enrichedPrompt = `${EVENING_BRIEFING_PROMPT}\n\n${getDateContext()}\n\n${eveningData}`;
 
       const apiMessages: ApiMessage[] = [{
         role: 'user',
@@ -365,7 +365,7 @@ export default function HomeScreen() {
       if (topics.length === 0) return;
       await markReviewOffered(db, userId);
       const topicsText = formatTopicsToReview(topics);
-      const enrichedPrompt = `${PROF_REVIEW_PROMPT}\n\n${topicsText}`;
+      const enrichedPrompt = `${PROF_REVIEW_PROMPT}\n\n${getDateContext()}\n\n${topicsText}`;
       const apiMessages: ApiMessage[] = [{
         role: 'user',
         content: '[SYSTEME] Tu viens de recevoir des notions à revoir. Propose spontanément une révision (message court).',
@@ -711,6 +711,9 @@ export default function HomeScreen() {
     try {
       let systemPrompt = selectedAgent.systemPrompt;
 
+      // 🆕 Injection du contexte temporel (bug #10)
+      systemPrompt = `${systemPrompt}\n\n${getDateContext()}`;
+
       if (selectedAgent.id === 'prof' && isBilanRequest(text)) {
         try {
           const profDb = await openProfDatabase();
@@ -1032,9 +1035,12 @@ export default function HomeScreen() {
         { role: 'user', content },
       ];
 
+      // 🆕 Injection du contexte temporel (bug #10)
+      const systemPromptWithDate = `${selectedAgent.systemPrompt}\n\n${getDateContext()}`;
+
       const result = await sendMessageToAgent({
         messages: apiMessages,
-        agentSystemPrompt: selectedAgent.systemPrompt,
+        agentSystemPrompt: systemPromptWithDate,
         enableTools: (selectedAgent as any).enableTools === true,
         agentId: selectedAgent.id,
       });
@@ -1054,7 +1060,7 @@ export default function HomeScreen() {
           messages: apiMessages,
           toolCall: firstTool,
           toolResult,
-          agentSystemPrompt: selectedAgent.systemPrompt,
+          agentSystemPrompt: systemPromptWithDate,
           agentId: selectedAgent.id,
         });
 
@@ -1209,9 +1215,12 @@ export default function HomeScreen() {
         { role: 'user', content },
       ];
 
+      // 🆕 Injection du contexte temporel (bug #10)
+      const systemPromptWithDate = `${selectedAgent.systemPrompt}\n\n${getDateContext()}`;
+
       const result = await sendMessageToAgent({
         messages: apiMessages,
-        agentSystemPrompt: selectedAgent.systemPrompt,
+        agentSystemPrompt: systemPromptWithDate,
         enableTools: (selectedAgent as any).enableTools === true,
         agentId: selectedAgent.id,
       });
@@ -1231,7 +1240,7 @@ export default function HomeScreen() {
           messages: apiMessages,
           toolCall: firstTool,
           toolResult,
-          agentSystemPrompt: selectedAgent.systemPrompt,
+          agentSystemPrompt: systemPromptWithDate,
           agentId: selectedAgent.id,
         });
 
@@ -1353,9 +1362,12 @@ export default function HomeScreen() {
       const congratsPrompt = `[SYSTEME] L'enfant vient de terminer le quiz "${quizTitle}" avec un score de ${correct}/${total}. Félicite-le chaleureusement, commente son score (sans juger), et propose-lui soit un nouveau quiz sur un autre thème, soit une autre activité (dictée, révision, exercice). Sois bref et chaleureux.`;
 
       try {
+        // 🆕 Injection du contexte temporel (bug #10)
+        const systemPromptWithDate = `${selectedAgent.systemPrompt}\n\n${getDateContext()}`;
+
         const result = await sendMessageToAgent({
           messages: [{ role: 'user', content: congratsPrompt }],
-          agentSystemPrompt: selectedAgent.systemPrompt,
+          agentSystemPrompt: systemPromptWithDate,
           enableTools: false,
           agentId: selectedAgent.id,
         });
