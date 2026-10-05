@@ -955,7 +955,7 @@ export default function HomeScreen() {
               visual: visualData,
             };
             setMessages((prev) => [...prev, visualMessage]);
-            saveMessage({ id: visualMessage.id, agentId: selectedAgent.id, text: '[VISUAL]', isUser: false });
+            saveMessage({ id: visualMessage.id, agentId: selectedAgent.id, text: '', isUser: false });
             messageAlreadyDisplayed = true;
           }
           currentResult = newResult;
@@ -1225,7 +1225,7 @@ export default function HomeScreen() {
               visual: visualData,
             };
             setMessages((prev) => [...prev, visualMessage]);
-            saveMessage({ id: visualMessage.id, agentId: selectedAgent.id, text: '[VISUAL]', isUser: false });
+            saveMessage({ id: visualMessage.id, agentId: selectedAgent.id, text: '', isUser: false });
             messageAlreadyDisplayed = true;
           } catch (e) { console.warn('[Prof] Parsing visual:', e); }
           currentResult = newResult;
@@ -1436,7 +1436,7 @@ export default function HomeScreen() {
               visual: visualData,
             };
             setMessages((prev) => [...prev, visualMessage]);
-            saveMessage({ id: visualMessage.id, agentId: selectedAgent.id, text: '[VISUAL]', isUser: false });
+            saveMessage({ id: visualMessage.id, agentId: selectedAgent.id, text: '', isUser: false });
             messageAlreadyDisplayed = true;
           } catch (e) { console.warn('[Prof] Parsing visual:', e); }
           currentResult = newResult;

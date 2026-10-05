@@ -33,23 +33,30 @@ type Props = {
   quizTitle?: string;
   quizQuestions?: QuizQuestion[];
   onQuizAnswer?: (questionIndex: number, userAnswer: string) => void;
-  // 🆕 A10 : bouton Relancer
+  // A10 : bouton Relancer
   isError?: boolean;
   onRetry?: () => void;
-  // 🆕 A1 : bouton Arrêter le quiz
+  // A1 : bouton Arrêter le quiz
   onStopQuiz?: () => void;
-  // 🆕 A7 v3 : visuel
+  // A7 v3 : visuel
   visual?: VisualData;
 };
 
-// Nettoyage des balises internes DeepSeek (<||DSML||> etc.)
+// Nettoyage AGRESSIF des balises internes DeepSeek (DSML, etc.)
 function cleanDsmlTags(text: string): string {
   if (!text) return '';
   return text
+    // Balises <||DSML||> et </||DSML||>
     .replace(/<+\|+\|?\s*DSML\s*\|?\|+>+/gi, '')
     .replace(/<\/+\|+\|?\s*DSML\s*\|?\|+>+/gi, '')
-    .replace(/<\|[^|>]+\|>/g, '')
+    // Balises type <| DSML | invoke ...>
+    .replace(/<+\s*\|+\s*DSML\s*\|+\s*[^>]*>/gi, '')
+    .replace(/<\/+\s*\|+\s*DSML\s*\|+\s*[^>]*>/gi, '')
+    // Restes : <|...|> générique
+    .replace(/<\|[^|>]*\|>/g, '')
+    // Lignes vides multiples
     .replace(/\n{3,}/g, '\n\n')
+    // Espaces multiples
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
 }
@@ -134,7 +141,7 @@ export default function Message({
     }
   }, [isDictation, autoSpeak, isUser, currentSentence]);
 
-  // 🆕 Bug #27 : ne relire la question QUE si elle n'a pas déjà été lue
+  // Bug #27 : ne relire la question QUE si elle n'a pas déjà été lue
   useEffect(() => {
     if (!isQuiz || !quizQuestions || !quizQuestions[currentIndex] || quizFinished) return;
     if (hasReadCurrentQuestionRef.current === currentIndex) return;
@@ -314,7 +321,6 @@ export default function Message({
       onQuizAnswer?.(-1, `FIN:${correctCount}/${totalQuestions}`);
     };
 
-    // 🆕 A1 : bouton Arrêter le quiz
     const handleStopQuiz = () => {
       stopSpeaking();
       if (isListening) {
@@ -576,7 +582,7 @@ export default function Message({
   // ============================================================
   const cleanedText = isUser ? text : cleanDsmlTags(text);
 
-  // 🆕 A10 : bulle d'erreur avec bouton Relancer
+  // A10 : bulle d'erreur avec bouton Relancer
   if (isError) {
     return (
       <View style={[styles.container, styles.agentContainer]}>
@@ -597,7 +603,7 @@ export default function Message({
     );
   }
 
-  // 🆕 A7 v3 : rendu du visuel si présent
+  // A7 v3 : rendu du visuel si présent
   if (visual) {
     return (
       <View style={[styles.container, styles.agentContainer]}>
@@ -638,7 +644,7 @@ export default function Message({
   );
 }
 
-// 🆕 A8 : styles Markdown
+// A8 : styles Markdown
 const markdownStyles = {
   body: {
     fontSize: 15,
@@ -678,15 +684,9 @@ const markdownStyles = {
     marginTop: 4,
     marginBottom: 3,
   },
-  bullet_list: {
-    marginVertical: 4,
-  },
-  ordered_list: {
-    marginVertical: 4,
-  },
-  list_item: {
-    marginVertical: 2,
-  },
+  bullet_list: { marginVertical: 4 },
+  ordered_list: { marginVertical: 4 },
+  list_item: { marginVertical: 2 },
   code_inline: {
     backgroundColor: '#F0F0F0',
     color: '#C7254E',
@@ -732,7 +732,7 @@ const styles = StyleSheet.create({
   agentText: { color: Colors.light.text },
   speakButton: { marginTop: Spacing.two, alignSelf: 'flex-start' },
 
-  // 🆕 A10 : bulle d'erreur
+  // A10 : bulle d'erreur
   errorBubble: { backgroundColor: '#FFEBEE', borderWidth: 1, borderColor: Colors.light.error, borderBottomLeftRadius: Spacing.one },
   errorHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, marginBottom: Spacing.two },
   errorTitle: { fontSize: 14, fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.error },

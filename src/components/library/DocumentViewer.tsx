@@ -23,21 +23,73 @@ type Props = {
   content: string;
 };
 
-// 🆕 Détecte un SVG brut dans un texte
+// Détecte un SVG brut
 function detectRawSvg(text: string): { svg: string; before: string; after: string } | null {
   if (!text) return null;
-
   const svgStart = text.indexOf('<svg');
   if (svgStart === -1) return null;
-
   const svgEnd = text.indexOf('</svg>', svgStart);
   if (svgEnd === -1) return null;
-
   const svg = text.substring(svgStart, svgEnd + '</svg>'.length);
   const before = text.substring(0, svgStart).trim();
   const after = text.substring(svgEnd + '</svg>'.length).trim();
-
   return { svg, before, after };
+}
+
+// Détecte un Mermaid brut
+function detectRawMermaid(text: string): { mermaid: string; before: string; after: string } | null {
+  if (!text) return null;
+  const keywords = [
+    'flowchart ', 'flowchart\n', 'graph TD', 'graph LR', 'graph TB', 'graph BT',
+    'timeline\n', 'timeline\r\n', 'mindmap\n', 'mindmap\r\n',
+    'sequenceDiagram', 'classDiagram', 'stateDiagram', 'pie title', 'gantt',
+  ];
+  for (const kw of keywords) {
+    const idx = text.indexOf(kw);
+    if (idx === -1) continue;
+    const after = text.substring(idx);
+    const stopMatch = after.match(/\n(#{1,3} |---|\*\*[A-ZÉÈÀ]|```)/);
+    const endIdx = stopMatch ? idx + stopMatch.index! : text.length;
+    const mermaid = text.substring(idx, endIdx).trim();
+    const before = text.substring(0, idx).trim();
+    const afterClean = text.substring(endIdx).trim();
+    return { mermaid, before, after: afterClean };
+  }
+  return null;
+}
+
+// 🆕 Détecte du HTML brut (h1, table, div, DOCTYPE...)
+function detectRawHtml(text: string): { html: string; before: string; after: string } | null {
+  if (!text) return null;
+
+  // Cas 1 : DOCTYPE complet
+  const doctypeIdx = text.indexOf('<!DOCTYPE');
+  if (doctypeIdx !== -1) {
+    const after = text.substring(doctypeIdx);
+    const stopMatch = after.match(/<\/html>/i);
+    const endIdx = stopMatch ? doctypeIdx + stopMatch.index! + '</html>'.length : text.length;
+    const html = text.substring(doctypeIdx, endIdx).trim();
+    const before = text.substring(0, doctypeIdx).trim();
+    const afterClean = text.substring(endIdx).trim();
+    return { html, before, after: afterClean };
+  }
+
+  // Cas 2 : fragments HTML avec balises structurantes
+  const htmlTags = ['<h1>', '<h2>', '<table', '<div', '<section', '<article'];
+  for (const tag of htmlTags) {
+    const idx = text.indexOf(tag);
+    if (idx === -1) continue;
+
+    // Vérifie qu'il y a au moins 2 balises HTML structurantes (pour éviter les faux positifs)
+    const htmlCount = (text.match(/<(h1|h2|h3|table|tr|td|div|section|article|ul|ol)\b/gi) || []).length;
+    if (htmlCount < 3) continue;
+
+    const html = text.substring(idx).trim();
+    const before = text.substring(0, idx).trim();
+    return { html, before, after: '' };
+  }
+
+  return null;
 }
 
 export default function DocumentViewer({ filePath, fileType, title, content }: Props) {
@@ -53,9 +105,7 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     fileType === 'application/octet-stream';
 
   useEffect(() => {
-    if (isText && filePath) {
-      loadTextFile();
-    }
+    if (isText && filePath) loadTextFile();
   }, [filePath, isText]);
 
   const loadTextFile = async () => {
@@ -65,8 +115,7 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
       const base64 = await (FileSystem as any).readAsStringAsync(filePath, {
         encoding: 'base64',
       });
-      const decoded = decodeBase64Utf8(base64);
-      setTextFileContent(decoded);
+      setTextFileContent(decodeBase64Utf8(base64));
       setError(null);
     } catch (e) {
       console.error('Erreur lecture fichier texte:', e);
@@ -76,7 +125,6 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     }
   };
 
-  // ===== IMAGE =====
   if (isImage && filePath) {
     return (
       <View style={styles.container}>
@@ -101,25 +149,15 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     );
   }
 
-  // ===== PDF =====
   if (isPdf && filePath) {
     return (
       <View style={styles.container}>
         <Pdf
           source={{ uri: filePath, cache: true }}
           style={styles.pdf}
-          onLoadComplete={(numberOfPages) => {
-            console.log(`PDF chargé : ${numberOfPages} pages`);
-            setIsLoading(false);
-          }}
-          onError={(err) => {
-            console.error('Erreur PDF:', err);
-            setError('Impossible de charger le PDF');
-            setIsLoading(false);
-          }}
-          onLoadProgress={(percent) => {
-            if (percent === 1) setIsLoading(false);
-          }}
+          onLoadComplete={(n) => { console.log(`PDF: ${n} pages`); setIsLoading(false); }}
+          onError={() => { setError('Impossible de charger le PDF'); setIsLoading(false); }}
+          onLoadProgress={(p) => { if (p === 1) setIsLoading(false); }}
           enablePaging={false}
           trustAllCerts={false}
         />
@@ -134,17 +172,15 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     );
   }
 
-  // ===== TEXTE / FICHIER TEXTE =====
   if (isText) {
     if (isLoading) {
       return (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={Colors.light.primary} />
-          <Text style={styles.loaderText}>Chargement du fichier...</Text>
+          <Text style={styles.loaderText}>Chargement...</Text>
         </View>
       );
     }
-
     if (error) {
       return (
         <View style={styles.unknownContainer}>
@@ -153,85 +189,70 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
         </View>
       );
     }
-
-    const displayContent = textFileContent || content || '(fichier vide)';
-    return <ContentRenderer content={displayContent} />;
+    return <ContentRenderer content={textFileContent || content || '(vide)'} />;
   }
 
-  // ===== CONTENU TEXTE SIMPLE (sans fichier) =====
-  if (!fileType && content) {
-    return <ContentRenderer content={content} />;
-  }
+  if (!fileType && content) return <ContentRenderer content={content} />;
 
-  // ===== FICHIER INCONNU =====
   return (
     <View style={styles.unknownContainer}>
-      <Ionicons
-        name={isPdf ? 'document-text' : 'document'}
-        size={64}
-        color={Colors.light.primary}
-      />
+      <Ionicons name="document" size={64} color={Colors.light.primary} />
       <Text style={styles.unknownTitle}>{title}</Text>
-      <Text style={styles.unknownText}>
-        {fileType ? `Type : ${fileType}` : 'Type inconnu'}
-      </Text>
-      <Text style={styles.unknownHint}>
-        Ce type de fichier n'est pas encore lisible dans l'appli.
-      </Text>
-      {content ? (
-        <View style={styles.unknownContentBox}>
-          <Markdown style={markdownStyles}>{content}</Markdown>
-        </View>
-      ) : null}
+      <Text style={styles.unknownHint}>Ce type de fichier n'est pas encore lisible.</Text>
     </View>
   );
 }
 
-// ============================================================
-// 🆕 RENDERER DE CONTENU : détecte __VISUAL__ et SVG brut
-// ============================================================
 function ContentRenderer({ content }: { content: string }) {
-  // 1. Priorité au marqueur __VISUAL__ (généré par Prof)
+  // 1. Marqueur __VISUAL__
   const visual = parseVisualMarker(content);
-
   if (visual) {
     const cleanContent = stripVisualMarker(content);
     return (
       <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        {cleanContent ? (
-          <Markdown style={markdownStyles}>{cleanContent}</Markdown>
-        ) : null}
-        <VisualBubble
-          type={visual.type}
-          title={visual.title}
-          code={visual.code}
-        />
+        {cleanContent ? <Markdown style={markdownStyles}>{cleanContent}</Markdown> : null}
+        <VisualBubble type={visual.type} title={visual.title} code={visual.code} />
       </ScrollView>
     );
   }
 
-  // 2. Sinon, détecte un SVG brut (<svg>...</svg>)
+  // 2. SVG brut
   const rawSvg = detectRawSvg(content);
-
   if (rawSvg) {
     return (
       <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        {rawSvg.before ? (
-          <Markdown style={markdownStyles}>{rawSvg.before}</Markdown>
-        ) : null}
-        <VisualBubble
-          type="svg"
-          title="Schéma"
-          code={rawSvg.svg}
-        />
-        {rawSvg.after ? (
-          <Markdown style={markdownStyles}>{rawSvg.after}</Markdown>
-        ) : null}
+        {rawSvg.before ? <Markdown style={markdownStyles}>{rawSvg.before}</Markdown> : null}
+        <VisualBubble type="svg" title="Schéma" code={rawSvg.svg} />
+        {rawSvg.after ? <Markdown style={markdownStyles}>{rawSvg.after}</Markdown> : null}
       </ScrollView>
     );
   }
 
-  // 3. Sinon, rendu Markdown normal
+  // 3. Mermaid brut
+  const rawMermaid = detectRawMermaid(content);
+  if (rawMermaid) {
+    return (
+      <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
+        {rawMermaid.before ? <Markdown style={markdownStyles}>{rawMermaid.before}</Markdown> : null}
+        <VisualBubble type="mermaid" title="Diagramme" code={rawMermaid.mermaid} />
+        {rawMermaid.after ? <Markdown style={markdownStyles}>{rawMermaid.after}</Markdown> : null}
+      </ScrollView>
+    );
+  }
+
+  // 4. HTML brut
+  const rawHtml = detectRawHtml(content);
+  if (rawHtml) {
+    return (
+      <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
+        {rawHtml.before ? <Markdown style={markdownStyles}>{rawHtml.before}</Markdown> : null}
+        <VisualBubble type="html" title="Fiche" code={rawHtml.html} />
+        {rawHtml.after ? <Markdown style={markdownStyles}>{rawHtml.after}</Markdown> : null}
+      </ScrollView>
+    );
+  }
+
+  // 5. Markdown normal
   return (
     <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
       <Markdown style={markdownStyles}>{content}</Markdown>
@@ -239,18 +260,13 @@ function ContentRenderer({ content }: { content: string }) {
   );
 }
 
-// Décode le base64 en texte UTF-8
 function decodeBase64Utf8(base64: string): string {
   try {
     const binaryString = (global as any).atob
       ? (global as any).atob(base64)
       : Buffer.from(base64, 'base64').toString('binary');
-
     const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-
+    for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
     return new TextDecoder('utf-8').decode(bytes);
   } catch (e) {
     console.error('Erreur décodage base64:', e);
@@ -258,188 +274,34 @@ function decodeBase64Utf8(base64: string): string {
   }
 }
 
-// 🆕 A6 : styles Markdown pour les documents
 const markdownStyles = {
-  body: {
-    fontSize: 15,
-    lineHeight: 23,
-    fontFamily: Fonts.regular,
-    color: Colors.light.text,
-  },
-  strong: {
-    fontFamily: Fonts.bold,
-    fontWeight: '700' as const,
-  },
-  em: {
-    fontStyle: 'italic' as const,
-    fontFamily: Fonts.regular,
-  },
-  heading1: {
-    fontSize: 22,
-    fontFamily: Fonts.bold,
-    fontWeight: '700' as const,
-    color: Colors.light.primary,
-    marginTop: 16,
-    marginBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-    paddingBottom: 4,
-  },
-  heading2: {
-    fontSize: 18,
-    fontFamily: Fonts.bold,
-    fontWeight: '700' as const,
-    color: Colors.light.primary,
-    marginTop: 14,
-    marginBottom: 6,
-  },
-  heading3: {
-    fontSize: 16,
-    fontFamily: Fonts.semibold,
-    fontWeight: '600' as const,
-    color: Colors.light.text,
-    marginTop: 10,
-    marginBottom: 4,
-  },
-  bullet_list: {
-    marginVertical: 6,
-  },
-  ordered_list: {
-    marginVertical: 6,
-  },
-  list_item: {
-    marginVertical: 3,
-  },
-  code_inline: {
-    backgroundColor: '#F0F0F0',
-    color: '#C7254E',
-    paddingHorizontal: 5,
-    borderRadius: 3,
-    fontFamily: 'monospace',
-    fontSize: 14,
-  },
-  fence: {
-    backgroundColor: '#F5F5F5',
-    padding: 10,
-    borderRadius: 6,
-    fontFamily: 'monospace',
-    fontSize: 13,
-    marginVertical: 8,
-  },
-  blockquote: {
-    borderLeftWidth: 4,
-    borderLeftColor: Colors.light.primary,
-    paddingLeft: 12,
-    paddingVertical: 4,
-    fontStyle: 'italic' as const,
-    color: Colors.light.textSecondary,
-    marginVertical: 6,
-    backgroundColor: Colors.light.backgroundElement,
-  },
-  link: {
-    color: Colors.light.primary,
-    textDecorationLine: 'underline' as const,
-  },
-  hr: {
-    backgroundColor: Colors.light.border,
-    height: 1,
-    marginVertical: 12,
-  },
+  body: { fontSize: 15, lineHeight: 23, fontFamily: Fonts.regular, color: Colors.light.text },
+  strong: { fontFamily: Fonts.bold, fontWeight: '700' as const },
+  em: { fontStyle: 'italic' as const, fontFamily: Fonts.regular },
+  heading1: { fontSize: 22, fontFamily: Fonts.bold, fontWeight: '700' as const, color: Colors.light.primary, marginTop: 16, marginBottom: 8, borderBottomWidth: 1, borderBottomColor: Colors.light.border, paddingBottom: 4 },
+  heading2: { fontSize: 18, fontFamily: Fonts.bold, fontWeight: '700' as const, color: Colors.light.primary, marginTop: 14, marginBottom: 6 },
+  heading3: { fontSize: 16, fontFamily: Fonts.semibold, fontWeight: '600' as const, color: Colors.light.text, marginTop: 10, marginBottom: 4 },
+  bullet_list: { marginVertical: 6 },
+  ordered_list: { marginVertical: 6 },
+  list_item: { marginVertical: 3 },
+  code_inline: { backgroundColor: '#F0F0F0', color: '#C7254E', paddingHorizontal: 5, borderRadius: 3, fontFamily: 'monospace', fontSize: 14 },
+  fence: { backgroundColor: '#F5F5F5', padding: 10, borderRadius: 6, fontFamily: 'monospace', fontSize: 13, marginVertical: 8 },
+  blockquote: { borderLeftWidth: 4, borderLeftColor: Colors.light.primary, paddingLeft: 12, paddingVertical: 4, fontStyle: 'italic' as const, color: Colors.light.textSecondary, marginVertical: 6, backgroundColor: Colors.light.backgroundElement },
+  link: { color: Colors.light.primary, textDecorationLine: 'underline' as const },
+  hr: { backgroundColor: Colors.light.border, height: 1, marginVertical: 12 },
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.light.background,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: Spacing.two,
-  },
-  fullImage: {
-    flex: 1,
-    width: '100%',
-  },
-  pdf: {
-    flex: 1,
-    width: '100%',
-    backgroundColor: Colors.light.backgroundElement,
-  },
-  loaderOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    gap: Spacing.two,
-  },
-  loaderText: {
-    fontSize: 14,
-    fontFamily: Fonts.regular,
-    color: Colors.light.textSecondary,
-  },
-  errorText: {
-    fontSize: 14,
-    fontFamily: Fonts.regular,
-    color: Colors.light.error,
-    textAlign: 'center',
-    padding: Spacing.four,
-  },
-  textContainer: {
-    flex: 1,
-    backgroundColor: Colors.light.background,
-  },
-  textContent: {
-    padding: Spacing.four,
-  },
-  textContentText: {
-    fontSize: 15,
-    lineHeight: 23,
-    fontFamily: Fonts.regular,
-    color: Colors.light.text,
-  },
-  unknownContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: Spacing.five,
-    gap: Spacing.three,
-  },
-  unknownTitle: {
-    fontSize: 20,
-    fontFamily: Fonts.semibold,
-    fontWeight: '600' as const,
-    color: Colors.light.text,
-    textAlign: 'center',
-  },
-  unknownText: {
-    fontSize: 14,
-    fontFamily: Fonts.regular,
-    color: Colors.light.textSecondary,
-  },
-  unknownHint: {
-    fontSize: 13,
-    fontFamily: Fonts.regular,
-    color: Colors.light.textSecondary,
-    fontStyle: 'italic' as const,
-    textAlign: 'center',
-  },
-  unknownContentBox: {
-    marginTop: Spacing.four,
-    padding: Spacing.three,
-    backgroundColor: Colors.light.backgroundElement,
-    borderRadius: Spacing.two,
-    width: '100%',
-  },
-  unknownContentText: {
-    fontSize: 14,
-    fontFamily: Fonts.regular,
-    color: Colors.light.text,
-    lineHeight: 20,
-  },
+  container: { flex: 1, backgroundColor: Colors.light.background },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.two },
+  fullImage: { flex: 1, width: '100%' },
+  pdf: { flex: 1, width: '100%', backgroundColor: Colors.light.backgroundElement },
+  loaderOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.9)', gap: Spacing.two },
+  loaderText: { fontSize: 14, fontFamily: Fonts.regular, color: Colors.light.textSecondary },
+  errorText: { fontSize: 14, fontFamily: Fonts.regular, color: Colors.light.error, textAlign: 'center', padding: Spacing.four },
+  textContainer: { flex: 1, backgroundColor: Colors.light.background },
+  textContent: { padding: Spacing.four },
+  unknownContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.five, gap: Spacing.three },
+  unknownTitle: { fontSize: 20, fontFamily: Fonts.semibold, fontWeight: '600' as const, color: Colors.light.text, textAlign: 'center' },
+  unknownHint: { fontSize: 13, fontFamily: Fonts.regular, color: Colors.light.textSecondary, fontStyle: 'italic' as const, textAlign: 'center' },
 });
