@@ -9,10 +9,11 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import Markdown from 'react-native-markdown-display';
 
 import { judgeAnswer } from '@/config/api';
 import { speakText, speakTextSlow, stopSpeaking } from '@/config/speech';
-import { Colors, Spacing } from '@/constants/theme';
+import { Colors, Fonts, Spacing } from '@/constants/theme';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { answersMatchLocal, looksAlmostCorrect } from '@/utils/answerMatch';
 
@@ -30,6 +31,11 @@ type Props = {
   quizTitle?: string;
   quizQuestions?: QuizQuestion[];
   onQuizAnswer?: (questionIndex: number, userAnswer: string) => void;
+  // 🆕 A10 : bouton Relancer
+  isError?: boolean;
+  onRetry?: () => void;
+  // 🆕 A1 : bouton Arrêter le quiz
+  onStopQuiz?: () => void;
 };
 
 // Nettoyage des balises internes DeepSeek (<||DSML||> etc.)
@@ -53,6 +59,9 @@ export default function Message({
   quizTitle,
   quizQuestions,
   onQuizAnswer,
+  isError = false,
+  onRetry,
+  onStopQuiz,
 }: Props) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRevealed, setIsRevealed] = useState(false);
@@ -74,6 +83,7 @@ export default function Message({
   const transcriptRef = useRef('');
   const isListeningRef = useRef(false);
   const inputRef = useRef<TextInput>(null);
+  const hasReadCurrentQuestionRef = useRef<number>(-1);
 
   const { isListening, error, start, stop, cancel } = useSpeechRecognition({
     onResult: (transcript) => {
@@ -119,19 +129,22 @@ export default function Message({
     }
   }, [isDictation, autoSpeak, isUser, currentSentence]);
 
+  // 🆕 Bug #27 : ne relire la question QUE si elle n'a pas déjà été lue
   useEffect(() => {
-    if (isQuiz && quizQuestions && quizQuestions[currentIndex] && !quizFinished) {
-      const timer = setTimeout(() => {
-        setIsPlaying(true);
-        speakText(quizQuestions[currentIndex].question, () => {
-          setIsPlaying(false);
-        });
-      }, 500);
-      return () => {
-        clearTimeout(timer);
-        stopSpeaking();
-      };
-    }
+    if (!isQuiz || !quizQuestions || !quizQuestions[currentIndex] || quizFinished) return;
+    if (hasReadCurrentQuestionRef.current === currentIndex) return;
+
+    hasReadCurrentQuestionRef.current = currentIndex;
+    const timer = setTimeout(() => {
+      setIsPlaying(true);
+      speakText(quizQuestions[currentIndex].question, () => {
+        setIsPlaying(false);
+      });
+    }, 500);
+    return () => {
+      clearTimeout(timer);
+      stopSpeaking();
+    };
   }, [isQuiz, currentIndex, quizQuestions, quizFinished]);
 
   useEffect(() => {
@@ -207,16 +220,10 @@ export default function Message({
     const totalQuestions = quizQuestions.length;
     const isLast = currentIndex === totalQuestions - 1;
 
-    /**
-     * 🆕 Validation hybride :
-     * 1. Comparaison locale tolérante → si OK : vert immédiat
-     * 2. Sinon → appel IA → résultat (correct / almost / faux)
-     */
     const validateCurrentAnswer = async (answer: string) => {
       if (!answer.trim() || isValidating) return;
       setIsValidating(true);
 
-      // Étape 1 : comparaison locale
       const localMatch = answersMatchLocal(answer, currentQuestion.answer);
       if (localMatch) {
         setCorrectCount((prev) => prev + 1);
@@ -231,7 +238,6 @@ export default function Message({
         return;
       }
 
-      // Étape 2 : appel IA (uniquement si ça vaut le coup)
       if (looksAlmostCorrect(answer, currentQuestion.answer)) {
         const result = await judgeAnswer({
           question: currentQuestion.question,
@@ -248,7 +254,6 @@ export default function Message({
             explanation: null,
           });
         } else if (result.almost) {
-          // Presque juste → compté juste par bienveillance (Q2 = A)
           setCorrectCount((prev) => prev + 1);
           setFeedback({
             correct: true,
@@ -265,7 +270,6 @@ export default function Message({
           });
         }
       } else {
-        // Vraiment faux → pas besoin d'appeler l'IA
         setFeedback({
           correct: false,
           almost: false,
@@ -305,11 +309,25 @@ export default function Message({
       onQuizAnswer?.(-1, `FIN:${correctCount}/${totalQuestions}`);
     };
 
+    // 🆕 A1 : bouton Arrêter le quiz
+    const handleStopQuiz = () => {
+      stopSpeaking();
+      if (isListening) {
+        try { cancel(); } catch {}
+      }
+      if (onStopQuiz) {
+        onStopQuiz();
+      } else {
+        // Fallback : informer Prof que l'enfant a arrêté
+        onQuizAnswer?.(-1, `STOP:${correctCount}/${currentIndex}`);
+      }
+    };
+
     if (quizFinished) {
       return (
         <View style={[styles.container, styles.agentContainer]}>
           <View style={[styles.bubble, styles.agentBubble, styles.quizBubble, styles.quizFinishedBubble]}>
-            <View style={styles.quizHeader}>
+            <View style={styles.quizTopRow}>
               <Ionicons name="trophy-outline" size={16} color="#2E7D32" />
               <Text style={styles.quizLabel}>{quizTitle || 'Quiz'}</Text>
               <View style={styles.quizFinishedBadge}>
@@ -335,11 +353,19 @@ export default function Message({
     return (
       <View style={[styles.container, styles.agentContainer]}>
         <View style={[styles.bubble, styles.agentBubble, styles.quizBubble]}>
-          <View style={styles.quizHeader}>
+          {/* 🆕 Bug #24 : header restructuré (titre tronqué + Question sur 2ème ligne) */}
+          <View style={styles.quizTopRow}>
             <Ionicons name="help-circle-outline" size={16} color={Colors.light.primary} />
-            <Text style={styles.quizLabel}>{quizTitle || 'Quiz'}</Text>
-            <Text style={styles.quizProgress}>Question {currentIndex + 1}/{totalQuestions}</Text>
+            <Text style={styles.quizLabel} numberOfLines={1} ellipsizeMode="tail">
+              {quizTitle || 'Quiz'}
+            </Text>
+            {/* 🆕 A1 : bouton Arrêter le quiz */}
+            <TouchableOpacity style={styles.quizStopButton} onPress={handleStopQuiz}>
+              <Ionicons name="close-circle-outline" size={20} color={Colors.light.error} />
+            </TouchableOpacity>
           </View>
+          <Text style={styles.quizProgress}>Question {currentIndex + 1}/{totalQuestions}</Text>
+
           <View style={styles.quizQuestionRow}>
             <Text style={styles.quizQuestion}>{currentQuestion.question}</Text>
             <TouchableOpacity style={styles.quizSpeakButton} onPress={handleSpeak}>
@@ -544,14 +570,40 @@ export default function Message({
   }
 
   // ============================================================
-  // MODE MESSAGE NORMAL
+  // MODE MESSAGE NORMAL (avec Markdown + bouton Relancer)
   // ============================================================
   const cleanedText = isUser ? text : cleanDsmlTags(text);
+
+  // 🆕 A10 : bulle d'erreur avec bouton Relancer
+  if (isError) {
+    return (
+      <View style={[styles.container, styles.agentContainer]}>
+        <View style={[styles.bubble, styles.errorBubble]}>
+          <View style={styles.errorHeader}>
+            <Ionicons name="warning-outline" size={20} color={Colors.light.error} />
+            <Text style={styles.errorTitle}>Erreur</Text>
+          </View>
+          <Text style={styles.errorText}>{cleanedText}</Text>
+          {onRetry && (
+            <TouchableOpacity style={styles.retryButton} onPress={onRetry}>
+              <Ionicons name="refresh" size={18} color={Colors.light.background} />
+              <Text style={styles.retryButtonText}>Relancer</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, isUser ? styles.userContainer : styles.agentContainer]}>
       <View style={[styles.bubble, isUser ? styles.userBubble : styles.agentBubble]}>
-        <Text style={[styles.text, isUser ? styles.userText : styles.agentText]}>{cleanedText}</Text>
+        {isUser ? (
+          <Text style={[styles.text, styles.userText]}>{cleanedText}</Text>
+        ) : (
+          // 🆕 A8 : rendu Markdown pour les messages de Prof
+          <Markdown style={markdownStyles}>{cleanedText}</Markdown>
+        )}
 
         {!isUser && (
           <TouchableOpacity style={styles.speakButton} onPress={handleSpeak}>
@@ -567,6 +619,88 @@ export default function Message({
   );
 }
 
+// 🆕 A8 : styles Markdown
+const markdownStyles = {
+  body: {
+    fontSize: 15,
+    lineHeight: 21,
+    fontFamily: Fonts.regular,
+    color: Colors.light.text,
+  },
+  strong: {
+    fontFamily: Fonts.bold,
+    fontWeight: '700' as const,
+  },
+  em: {
+    fontStyle: 'italic' as const,
+    fontFamily: Fonts.regular,
+  },
+  heading1: {
+    fontSize: 20,
+    fontFamily: Fonts.bold,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+    marginTop: 8,
+    marginBottom: 6,
+  },
+  heading2: {
+    fontSize: 17,
+    fontFamily: Fonts.bold,
+    fontWeight: '700' as const,
+    color: Colors.light.text,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  heading3: {
+    fontSize: 16,
+    fontFamily: Fonts.semibold,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+    marginTop: 4,
+    marginBottom: 3,
+  },
+  bullet_list: {
+    marginVertical: 4,
+  },
+  ordered_list: {
+    marginVertical: 4,
+  },
+  list_item: {
+    marginVertical: 2,
+  },
+  code_inline: {
+    backgroundColor: '#F0F0F0',
+    color: '#C7254E',
+    paddingHorizontal: 4,
+    borderRadius: 3,
+    fontFamily: 'monospace',
+  },
+  fence: {
+    backgroundColor: '#F5F5F5',
+    padding: 8,
+    borderRadius: 4,
+    fontFamily: 'monospace',
+    fontSize: 13,
+  },
+  blockquote: {
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.light.primary,
+    paddingLeft: 8,
+    fontStyle: 'italic' as const,
+    color: Colors.light.textSecondary,
+    marginVertical: 4,
+  },
+  link: {
+    color: Colors.light.primary,
+    textDecorationLine: 'underline' as const,
+  },
+  hr: {
+    backgroundColor: Colors.light.border,
+    height: 1,
+    marginVertical: 8,
+  },
+};
+
 const styles = StyleSheet.create({
   container: { marginVertical: Spacing.two, paddingHorizontal: Spacing.three, flexDirection: 'row' },
   userContainer: { justifyContent: 'flex-end' },
@@ -574,47 +708,58 @@ const styles = StyleSheet.create({
   bubble: { maxWidth: '85%', paddingVertical: Spacing.three, paddingHorizontal: Spacing.three, borderRadius: Spacing.four },
   userBubble: { backgroundColor: Colors.light.primary, borderBottomRightRadius: Spacing.one },
   agentBubble: { backgroundColor: Colors.light.backgroundElement, borderBottomLeftRadius: Spacing.one },
-  text: { fontSize: 15, lineHeight: 21 },
+  text: { fontSize: 15, lineHeight: 21, fontFamily: Fonts.regular },
   userText: { color: Colors.light.background },
   agentText: { color: Colors.light.text },
   speakButton: { marginTop: Spacing.two, alignSelf: 'flex-start' },
 
+  // 🆕 A10 : bulle d'erreur
+  errorBubble: { backgroundColor: '#FFEBEE', borderWidth: 1, borderColor: Colors.light.error, borderBottomLeftRadius: Spacing.one },
+  errorHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, marginBottom: Spacing.two },
+  errorTitle: { fontSize: 14, fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.error },
+  errorText: { fontSize: 14, lineHeight: 20, fontFamily: Fonts.regular, color: Colors.light.text },
+  retryButton: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, backgroundColor: Colors.light.primary, paddingVertical: Spacing.two, paddingHorizontal: Spacing.three, borderRadius: Spacing.two, marginTop: Spacing.three, alignSelf: 'flex-start' },
+  retryButtonText: { fontSize: 14, fontWeight: '600', fontFamily: Fonts.semibold, color: Colors.light.background },
+
+  // Dictée
   dictationBubble: { backgroundColor: '#FFF8E1', borderWidth: 2, borderColor: Colors.light.primary, borderStyle: 'dashed', minWidth: 260 },
   dictationHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.two, gap: Spacing.one },
-  dictationLabel: { fontSize: 12, fontWeight: '700', color: Colors.light.primary, textTransform: 'uppercase', letterSpacing: 0.5 },
-  dictationProgress: { fontSize: 12, color: Colors.light.textSecondary, marginLeft: 'auto', fontWeight: '600' },
-  dictationHint: { fontSize: 14, color: Colors.light.text, marginBottom: Spacing.three, lineHeight: 20 },
+  dictationLabel: { fontSize: 12, fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.primary, textTransform: 'uppercase', letterSpacing: 0.5 },
+  dictationProgress: { fontSize: 12, fontFamily: Fonts.regular, color: Colors.light.textSecondary, marginLeft: 'auto', fontWeight: '600' },
+  dictationHint: { fontSize: 14, fontFamily: Fonts.regular, color: Colors.light.text, marginBottom: Spacing.three, lineHeight: 20 },
   dictationActions: { flexDirection: 'row', gap: Spacing.two, flexWrap: 'wrap' },
   dictationButton: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, backgroundColor: Colors.light.primary, paddingVertical: Spacing.two, paddingHorizontal: Spacing.three, borderRadius: Spacing.two },
   dictationButtonOutline: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: Colors.light.primary },
-  dictationButtonText: { fontSize: 14, fontWeight: '600', color: Colors.light.background },
+  dictationButtonText: { fontSize: 14, fontWeight: '600', fontFamily: Fonts.semibold, color: Colors.light.background },
   dictationButtonTextOutline: { color: Colors.light.primary },
   dictationNav: { flexDirection: 'row', justifyContent: 'space-between', marginTop: Spacing.three, paddingTop: Spacing.three, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.1)' },
   dictationNavButton: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, paddingVertical: Spacing.two, paddingHorizontal: Spacing.two },
   dictationNavButtonDisabled: { opacity: 0.4 },
-  dictationNavText: { fontSize: 14, fontWeight: '600', color: Colors.light.primary },
+  dictationNavText: { fontSize: 14, fontWeight: '600', fontFamily: Fonts.semibold, color: Colors.light.primary },
   dictationNavTextDisabled: { color: Colors.light.textSecondary },
-  dictationEndHint: { fontSize: 12, color: Colors.light.textSecondary, marginTop: Spacing.three, fontStyle: 'italic', textAlign: 'center' },
-  dictationRevealedTitle: { fontSize: 14, fontWeight: '700', color: Colors.light.primary, marginBottom: Spacing.two },
-  dictationRevealedText: { fontSize: 15, color: Colors.light.text, lineHeight: 22, marginBottom: Spacing.one },
-  dictationRevealedTextActive: { fontWeight: '700', color: Colors.light.primary },
+  dictationEndHint: { fontSize: 12, fontFamily: Fonts.regular, color: Colors.light.textSecondary, marginTop: Spacing.three, fontStyle: 'italic', textAlign: 'center' },
+  dictationRevealedTitle: { fontSize: 14, fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.primary, marginBottom: Spacing.two },
+  dictationRevealedText: { fontSize: 15, fontFamily: Fonts.regular, color: Colors.light.text, lineHeight: 22, marginBottom: Spacing.one },
+  dictationRevealedTextActive: { fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.primary },
 
+  // 🆕 Bug #24 : quiz header restructuré
   quizBubble: { backgroundColor: '#E8F5E9', borderWidth: 2, borderColor: '#2E7D32', minWidth: 280 },
   quizFinishedBubble: { backgroundColor: '#FFF3E0', borderColor: '#FFB300' },
   quizFinishedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#2E7D32', paddingHorizontal: Spacing.two, paddingVertical: 2, borderRadius: Spacing.one, marginLeft: 'auto' },
-  quizFinishedBadgeText: { fontSize: 10, fontWeight: '700', color: Colors.light.background, textTransform: 'uppercase', letterSpacing: 0.5 },
+  quizFinishedBadgeText: { fontSize: 10, fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.background, textTransform: 'uppercase', letterSpacing: 0.5 },
   quizScoreContainer: { alignItems: 'center', paddingVertical: Spacing.four, gap: Spacing.two },
-  quizScoreText: { fontSize: 36, fontWeight: '800', color: '#2E7D32' },
-  quizScoreLabel: { fontSize: 14, color: Colors.light.text, textAlign: 'center', fontStyle: 'italic' },
-  quizFinishedHint: { fontSize: 12, color: Colors.light.textSecondary, textAlign: 'center', fontStyle: 'italic', marginTop: Spacing.two },
-  quizHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.three, gap: Spacing.one },
-  quizLabel: { fontSize: 12, fontWeight: '700', color: '#2E7D32', textTransform: 'uppercase', letterSpacing: 0.5 },
-  quizProgress: { fontSize: 12, color: Colors.light.textSecondary, marginLeft: 'auto', fontWeight: '600' },
+  quizScoreText: { fontSize: 36, fontWeight: '800', fontFamily: Fonts.bold, color: '#2E7D32' },
+  quizScoreLabel: { fontSize: 14, fontFamily: Fonts.regular, color: Colors.light.text, textAlign: 'center', fontStyle: 'italic' },
+  quizFinishedHint: { fontSize: 12, fontFamily: Fonts.regular, color: Colors.light.textSecondary, textAlign: 'center', fontStyle: 'italic', marginTop: Spacing.two },
+  quizTopRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, marginBottom: 4 },
+  quizLabel: { fontSize: 12, fontWeight: '700', fontFamily: Fonts.bold, color: '#2E7D32', textTransform: 'uppercase', letterSpacing: 0.5, flex: 1 },
+  quizStopButton: { padding: 2 },
+  quizProgress: { fontSize: 12, fontFamily: Fonts.regular, color: Colors.light.textSecondary, fontWeight: '600', marginBottom: Spacing.three },
   quizQuestionRow: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.three, gap: Spacing.two },
-  quizQuestion: { flex: 1, fontSize: 16, fontWeight: '600', color: Colors.light.text, lineHeight: 22 },
+  quizQuestion: { flex: 1, fontSize: 16, fontWeight: '600', fontFamily: Fonts.semibold, color: Colors.light.text, lineHeight: 22 },
   quizSpeakButton: { padding: Spacing.one },
   quizInputContainer: { flexDirection: 'row', gap: Spacing.two, alignItems: 'center' },
-  quizInput: { flex: 1, backgroundColor: Colors.light.background, paddingVertical: Spacing.two, paddingHorizontal: Spacing.three, borderRadius: Spacing.two, fontSize: 16, color: Colors.light.text, borderWidth: 1, borderColor: '#A5D6A7' },
+  quizInput: { flex: 1, backgroundColor: Colors.light.background, paddingVertical: Spacing.two, paddingHorizontal: Spacing.three, borderRadius: Spacing.two, fontSize: 16, fontFamily: Fonts.regular, color: Colors.light.text, borderWidth: 1, borderColor: '#A5D6A7' },
   quizMicIcon: { width: 44, height: 44, borderRadius: Spacing.two, backgroundColor: Colors.light.backgroundElement, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#A5D6A7' },
   quizValidateButton: { backgroundColor: '#2E7D32', width: 44, height: 44, borderRadius: Spacing.two, alignItems: 'center', justifyContent: 'center' },
   quizValidateButtonDisabled: { backgroundColor: '#C8E6C9' },
@@ -623,27 +768,27 @@ const styles = StyleSheet.create({
   quizFeedbackCorrect: { backgroundColor: '#C8E6C9' },
   quizFeedbackWrong: { backgroundColor: '#FFCDD2' },
   quizFeedbackAlmost: { backgroundColor: '#FFE0B2' },
-  quizFeedbackText: { fontSize: 15, fontWeight: '700' },
+  quizFeedbackText: { fontSize: 15, fontWeight: '700', fontFamily: Fonts.bold },
   quizFeedbackTextCorrect: { color: '#2E7D32' },
   quizFeedbackTextWrong: { color: '#C62828' },
   quizFeedbackTextAlmost: { color: '#E65100' },
-  quizFeedbackExpected: { fontSize: 14, color: Colors.light.text, marginBottom: Spacing.two, fontStyle: 'italic' },
-  quizFeedbackAlmostHint: { fontSize: 13, color: '#E65100', marginBottom: Spacing.two, fontStyle: 'italic' },
-  quizFeedbackExpectedBold: { fontWeight: '700', color: '#2E7D32' },
-  quizFeedbackExplanation: { fontSize: 13, color: Colors.light.text, marginBottom: Spacing.two, lineHeight: 19, backgroundColor: '#F5F5F5', padding: Spacing.two, borderRadius: Spacing.one },
+  quizFeedbackExpected: { fontSize: 14, fontFamily: Fonts.regular, color: Colors.light.text, marginBottom: Spacing.two, fontStyle: 'italic' },
+  quizFeedbackAlmostHint: { fontSize: 13, fontFamily: Fonts.regular, color: '#E65100', marginBottom: Spacing.two, fontStyle: 'italic' },
+  quizFeedbackExpectedBold: { fontWeight: '700', fontFamily: Fonts.bold, color: '#2E7D32' },
+  quizFeedbackExplanation: { fontSize: 13, fontFamily: Fonts.regular, color: Colors.light.text, marginBottom: Spacing.two, lineHeight: 19, backgroundColor: '#F5F5F5', padding: Spacing.two, borderRadius: Spacing.one },
   quizButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.two, paddingVertical: Spacing.three, paddingHorizontal: Spacing.four, borderRadius: Spacing.two, marginTop: Spacing.two },
   quizButtonPrimary: { backgroundColor: Colors.light.primary },
   quizButtonSuccess: { backgroundColor: '#2E7D32' },
-  quizButtonText: { fontSize: 15, fontWeight: '700', color: Colors.light.background },
+  quizButtonText: { fontSize: 15, fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.background },
   quizMicContainer: { marginTop: Spacing.two },
   quizMicRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, marginBottom: Spacing.two },
-  quizMicText: { fontSize: 15, fontWeight: '600', color: '#C62828' },
+  quizMicText: { fontSize: 15, fontWeight: '600', fontFamily: Fonts.semibold, color: '#C62828' },
   quizMicTextIdle: { color: Colors.light.textSecondary },
-  quizMicTranscript: { fontSize: 16, color: Colors.light.text, fontStyle: 'italic', paddingVertical: Spacing.two, paddingHorizontal: Spacing.three, backgroundColor: Colors.light.background, borderRadius: Spacing.two, marginBottom: Spacing.two },
-  quizMicHint: { fontSize: 14, color: Colors.light.textSecondary, fontStyle: 'italic', paddingVertical: Spacing.two, marginBottom: Spacing.two },
+  quizMicTranscript: { fontSize: 16, fontFamily: Fonts.regular, color: Colors.light.text, fontStyle: 'italic', paddingVertical: Spacing.two, paddingHorizontal: Spacing.three, backgroundColor: Colors.light.background, borderRadius: Spacing.two, marginBottom: Spacing.two },
+  quizMicHint: { fontSize: 14, fontFamily: Fonts.regular, color: Colors.light.textSecondary, fontStyle: 'italic', paddingVertical: Spacing.two, marginBottom: Spacing.two },
   quizMicActions: { flexDirection: 'row', gap: Spacing.two },
   quizMicButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.two, paddingVertical: Spacing.three, borderRadius: Spacing.two },
   quizMicButtonCancel: { backgroundColor: '#C62828' },
   quizMicButtonValidate: { backgroundColor: '#2E7D32' },
-  quizMicButtonText: { fontSize: 15, fontWeight: '700', color: Colors.light.background },
+  quizMicButtonText: { fontSize: 15, fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.background },
 });

@@ -44,7 +44,8 @@
       "expo-sqlite",
       "expo-notifications",
       "expo-sharing",
-      "react-native-blob-util"
+      "react-native-blob-util",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true,

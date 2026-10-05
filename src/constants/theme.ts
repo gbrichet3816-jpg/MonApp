@@ -1,6 +1,7 @@
 /**
  * Charte graphique de l'application
  * 60% Blanc / 30% Bleu / 10% Vert
+ * Police : Nunito
  */
 
 import '@/global.css';
@@ -82,29 +83,14 @@ export const Colors = {
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
-// 🔤 Polices (inchangé)
-export const Fonts = Platform.select({
-  ios: {
-    sans: 'system-ui',
-    serif: 'ui-serif',
-    rounded: 'ui-rounded',
-    mono: 'ui-monospace',
-  },
-  default: {
-    sans: 'normal',
-    serif: 'serif',
-    rounded: 'normal',
-    mono: 'monospace',
-  },
-  web: {
-    sans: 'var(--font-display)',
-    serif: 'var(--font-serif)',
-    rounded: 'var(--font-rounded)',
-    mono: 'var(--font-mono)',
-  },
-});
+// 🔤 Polices Nunito (A9)
+export const Fonts = {
+  regular: 'Nunito_400Regular',
+  semibold: 'Nunito_600SemiBold',
+  bold: 'Nunito_700Bold',
+} as const;
 
-// 📏 Espacements (inchangé)
+// 📏 Espacements
 export const Spacing = {
   half: 2,
   one: 4,

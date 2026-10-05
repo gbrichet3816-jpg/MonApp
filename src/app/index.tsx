@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, AppState, KeyboardAvoidingView, LogBox, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-// Masquer le warning cosmétique d'expo-router (Fast Refresh)
 LogBox.ignoreLogs([
   "Can't perform a React state update on a component that hasn't mounted yet",
 ]);
@@ -140,6 +139,13 @@ function isScheduleQuestion(text: string): boolean {
 
 function findToolResult(toolResults: string[], prefix: string): string | null {
   return toolResults.find((r) => r.startsWith(prefix)) || null;
+}
+
+// 🆕 Bug #20 + #22 : détecte si le DERNIER message est un quiz actif
+function hasActiveQuiz(messages: ChatMessage[]): boolean {
+  const visibleMessages = messages.filter((m) => m.isQuiz || (m.text && m.text.trim()));
+  const last = visibleMessages[visibleMessages.length - 1];
+  return last?.isQuiz === true;
 }
 
 // ============================================================
@@ -939,6 +945,9 @@ export default function HomeScreen() {
             id: `agent-${Date.now()}`,
             text: 'Je n\'ai pas réussi à formuler une réponse. Réessaie avec un autre message 😅',
             isUser: false,
+            // 🆕 A10 : bouton Relancer
+            isError: true,
+            originalText: text,
           };
           setMessages((prev) => [...prev, fallbackMessage]);
           saveMessage({ id: fallbackMessage.id, agentId: selectedAgent.id, text: fallbackMessage.text, isUser: false });
@@ -958,11 +967,52 @@ export default function HomeScreen() {
         id: `error-${Date.now()}`,
         text: `Erreur : ${error instanceof Error ? error.message : 'inconnue'}`,
         isUser: false,
+        // 🆕 A10 : bouton Relancer
+        isError: true,
+        originalText: text,
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
       console.log('🔴 finally atteint');
       if (isMounted.current) setIsLoading(false);
+    }
+  };
+
+  // 🆕 A10 : relancer un message
+  const handleRetry = async (originalText: string) => {
+    // Supprime la bulle d'erreur
+    setMessages((prev) => prev.filter((m) => !(m.isError && m.originalText === originalText)));
+    // Relance le message
+    await handleSend(originalText);
+  };
+
+  // 🆕 A1 : arrêter le quiz
+  const handleStopQuiz = async (messageId: string) => {
+    if (!selectedAgent) return;
+
+    const prompt = `[SYSTEME] L'enfant a arrêté le quiz volontairement. Réagis gentiment, sans juger. Propose-lui autre chose (autre quiz, dictée, révision, discussion). Sois bref.`;
+
+    try {
+      const result = await sendMessageToAgent({
+        messages: [{ role: 'user', content: prompt }],
+        agentSystemPrompt: selectedAgent.systemPrompt,
+        enableTools: false,
+        agentId: selectedAgent.id,
+      });
+
+      if (!isMounted.current) return;
+
+      if (result.reply && result.reply.trim().length > 0) {
+        const finalMessage: ChatMessage = {
+          id: `agent-stop-quiz-${Date.now()}`,
+          text: result.reply,
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, finalMessage]);
+        saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
+      }
+    } catch (e) {
+      console.warn('[Quiz] Erreur arrêt:', e);
     }
   };
 
@@ -1148,6 +1198,8 @@ export default function HomeScreen() {
             id: `agent-${Date.now()}`,
             text: 'Je n\'ai pas réussi à formuler une réponse. Réessaie 😅',
             isUser: false,
+            isError: true,
+            originalText: userText,
           };
           setMessages((prev) => [...prev, fallbackMessage]);
           saveMessage({ id: fallbackMessage.id, agentId: selectedAgent.id, text: fallbackMessage.text, isUser: false });
@@ -1166,6 +1218,8 @@ export default function HomeScreen() {
         id: `error-${Date.now()}`,
         text: `Erreur : ${error instanceof Error ? error.message : 'inconnue'}`,
         isUser: false,
+        isError: true,
+        originalText: message || pendingFile.fileName,
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
@@ -1335,6 +1389,8 @@ export default function HomeScreen() {
             id: `agent-${Date.now()}`,
             text: 'Je n\'ai pas réussi à formuler une réponse. Réessaie 😅',
             isUser: false,
+            isError: true,
+            originalText: userText,
           };
           setMessages((prev) => [...prev, fallbackMessage]);
           saveMessage({ id: fallbackMessage.id, agentId: selectedAgent.id, text: fallbackMessage.text, isUser: false });
@@ -1353,6 +1409,8 @@ export default function HomeScreen() {
         id: `error-${Date.now()}`,
         text: `Erreur : ${error instanceof Error ? error.message : 'inconnue'}`,
         isUser: false,
+        isError: true,
+        originalText: userText,
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
@@ -1376,6 +1434,12 @@ export default function HomeScreen() {
     userAnswer: string
   ) => {
     console.log('[Quiz] Réponse:', { messageId, questionIndex, userAnswer });
+
+    // 🆕 A1 : si l'enfant arrête le quiz
+    if (questionIndex === -1 && userAnswer.startsWith('STOP:')) {
+      await handleStopQuiz(messageId);
+      return;
+    }
 
     if (questionIndex === -1 && userAnswer.startsWith('FIN:')) {
       const scorePart = userAnswer.replace('FIN:', '');
@@ -1447,12 +1511,14 @@ export default function HomeScreen() {
           messages={messages}
           emptyText={emptyText}
           onQuizAnswer={handleQuizAnswer}
+          onRetry={handleRetry}
         />
         <InputBar
           onSend={handleSend}
           onFilePicked={handleFilePicked}
           onPhotoTaken={handlePhotoTaken}
           disabled={!selectedAgent || isLoading}
+          micDisabled={hasActiveQuiz(messages)}
         />
       </KeyboardAvoidingView>
       <AgentMenu

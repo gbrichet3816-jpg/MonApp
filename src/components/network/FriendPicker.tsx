@@ -1,21 +1,22 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
 import {
-    ActivityIndicator,
-    Modal,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-    fetchFriendsFromServer,
-    getLocalProfile,
-    loadFriendNicknames,
+  fetchFriendsFromServer,
+  getLocalProfile,
+  loadFriendNicknames,
 } from '@/config/user';
-import { Colors, Spacing } from '@/constants/theme';
+import { Colors, Fonts, Spacing } from '@/constants/theme';
 
 type Friend = {
   code: string;
@@ -40,6 +41,10 @@ export default function FriendPicker({
   const [nicknames, setNicknames] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+
+  // 🆕 Bug #26 : SafeArea pour ne pas cacher le bouton Envoyer
+  const insets = useSafeAreaInsets();
+  const safeBottom = Math.max(insets.bottom, 80);
 
   useEffect(() => {
     if (visible) {
@@ -80,7 +85,7 @@ export default function FriendPicker({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <View style={styles.panel}>
+        <View style={[styles.panel, { paddingBottom: safeBottom }]}>
           <View style={styles.header}>
             <TouchableOpacity onPress={onClose}>
               <Ionicons name="close" size={26} color={Colors.light.text} />
@@ -153,7 +158,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: Spacing.four,
     borderTopRightRadius: Spacing.four,
     padding: Spacing.four,
-    maxHeight: '80%',
+    maxHeight: '90%',
   },
   header: {
     flexDirection: 'row',
@@ -164,6 +169,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 18,
     fontWeight: '700',
+    fontFamily: Fonts.bold,
     color: Colors.light.text,
   },
   loadingContainer: {
@@ -177,11 +183,13 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 18,
     fontWeight: '600',
+    fontFamily: Fonts.semibold,
     color: Colors.light.text,
     marginTop: Spacing.three,
   },
   emptyText: {
     fontSize: 14,
+    fontFamily: Fonts.regular,
     color: Colors.light.textSecondary,
     textAlign: 'center',
     marginTop: Spacing.two,
@@ -208,10 +216,12 @@ const styles = StyleSheet.create({
   friendName: {
     fontSize: 16,
     fontWeight: '600',
+    fontFamily: Fonts.semibold,
     color: Colors.light.text,
   },
   friendCode: {
     fontSize: 12,
+    fontFamily: Fonts.regular,
     color: Colors.light.textSecondary,
     marginTop: 2,
   },
@@ -228,6 +238,7 @@ const styles = StyleSheet.create({
   confirmText: {
     fontSize: 16,
     fontWeight: '600',
+    fontFamily: Fonts.semibold,
     color: Colors.light.background,
   },
 });

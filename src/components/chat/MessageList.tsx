@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 
-import { Colors, Spacing } from '@/constants/theme';
+import { Colors, Fonts, Spacing } from '@/constants/theme';
 
 import Message, { type QuizQuestion } from './Message';
 
@@ -13,44 +13,53 @@ export type ChatMessage = {
   isQuiz?: boolean;
   quizTitle?: string;
   quizQuestions?: QuizQuestion[];
+  // 🆕 A10 : pour bouton Relancer
+  isError?: boolean;
+  originalText?: string;
 };
 
 type Props = {
   messages: ChatMessage[];
   emptyText: string;
   onQuizAnswer?: (messageId: string, questionIndex: number, userAnswer: string) => void;
+  // 🆕 A10 : callback pour relancer un message
+  onRetry?: (originalText: string) => void;
 };
 
-export default function MessageList({ messages, emptyText, onQuizAnswer }: Props) {
+export default function MessageList({ messages, emptyText, onQuizAnswer, onRetry }: Props) {
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
   // 🆕 Bug #2 : filtrer les messages techniques
   const visibleMessages = messages.filter((msg) => {
-    // ✅ Les messages quiz/dictée passent TOUJOURS en premier (avant le check texte vide)
     if (msg.isQuiz) return true;
     if (msg.isDictation) return true;
 
-    // Ignore les messages dont le texte est vide
     if (!msg.text || !msg.text.trim()) return false;
 
-    // Ignore les marqueurs techniques internes
     if (msg.text.startsWith('__QUIZ__:') || msg.text.startsWith('__DICTATION__:')) {
       return false;
     }
 
-    // Ignore les messages de type "[QUIZ] ..." (marqueurs de sauvegarde)
     if (msg.text.startsWith('[QUIZ] ')) return false;
 
     return true;
   });
 
+  // 🆕 Bug #21 + #22 : détecter si le DERNIER message est un quiz actif
+  // (au lieu de regarder si un quiz existe dans l'historique)
+  const lastMessage = visibleMessages[visibleMessages.length - 1];
+  const hasActiveQuiz = lastMessage?.isQuiz === true;
+
   useEffect(() => {
+    // 🆕 On ne scrolle PAS en bas si le DERNIER message est un quiz actif
+    if (hasActiveQuiz) return;
+
     if (visibleMessages.length > 0) {
       setTimeout(() => {
         listRef.current?.scrollToEnd({ animated: true });
       }, 100);
     }
-  }, [visibleMessages.length]);
+  }, [visibleMessages.length, hasActiveQuiz]);
 
   if (visibleMessages.length === 0) {
     return (
@@ -77,10 +86,15 @@ export default function MessageList({ messages, emptyText, onQuizAnswer }: Props
           onQuizAnswer={(questionIndex, userAnswer) => {
             onQuizAnswer?.(item.id, questionIndex, userAnswer);
           }}
+          // 🆕 A10 : bouton Relancer
+          isError={item.isError}
+          onRetry={item.isError && item.originalText ? () => onRetry?.(item.originalText!) : undefined}
         />
       )}
       contentContainerStyle={styles.listContent}
+      // 🆕 Bug #22 : on scrolle si le DERNIER message n'est PAS un quiz
       onContentSizeChange={() => {
+        if (hasActiveQuiz) return;
         listRef.current?.scrollToEnd({ animated: true });
       }}
     />
@@ -99,6 +113,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 16,
+    fontFamily: Fonts.regular,
     color: Colors.light.textSecondary,
     textAlign: 'center',
   },

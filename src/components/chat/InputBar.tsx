@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
@@ -12,6 +12,8 @@ type Props = {
   onFilePicked?: (file: ImportedFile) => void;
   onPhotoTaken?: (photoUri: string, base64?: string) => void;
   disabled?: boolean;
+  /** 🆕 Désactive complètement le micro (utile pendant un quiz) */
+  micDisabled?: boolean;
   placeholder?: string;
 };
 
@@ -20,6 +22,7 @@ export default function InputBar({
   onFilePicked,
   onPhotoTaken,
   disabled = false,
+  micDisabled = false,
   placeholder = 'Écris un message...',
 }: Props) {
   const [text, setText] = useState('');
@@ -27,9 +30,21 @@ export default function InputBar({
 
   const { isListening, error, start, stop, cancel } = useSpeechRecognition({
     onResult: (transcript) => {
+      // 🆕 Si le micro est désactivé, on ignore le résultat
+      if (micDisabled) return;
       setText(transcript);
     },
   });
+
+  // 🆕 Bug #20 : si micDisabled devient true, on arrête immédiatement le micro
+  useEffect(() => {
+    if (micDisabled && isListening) {
+      try {
+        stop();
+      } catch {}
+      setText('');   // On efface le texte dicté en cours
+    }
+  }, [micDisabled, isListening]);
 
   const handleSend = () => {
     const trimmed = text.trim();
@@ -39,7 +54,7 @@ export default function InputBar({
   };
 
   const handleMicPress = async () => {
-    if (isListening) return;
+    if (isListening || micDisabled) return;
 
     try {
       await start();
@@ -147,11 +162,18 @@ export default function InputBar({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.gridButton, disabled && styles.buttonDisabled]}
+            style={[
+              styles.gridButton,
+              (disabled || micDisabled) && styles.buttonDisabled,
+            ]}
             onPress={handleMicPress}
-            disabled={disabled}
+            disabled={disabled || micDisabled}
           >
-            <Ionicons name="mic" size={20} color={Colors.light.primary} />
+            <Ionicons
+              name="mic"
+              size={20}
+              color={micDisabled ? Colors.light.textSecondary : Colors.light.primary}
+            />
           </TouchableOpacity>
 
           <TouchableOpacity
