@@ -23,6 +23,23 @@ type Props = {
   content: string;
 };
 
+// 🆕 Détecte un SVG brut dans un texte
+function detectRawSvg(text: string): { svg: string; before: string; after: string } | null {
+  if (!text) return null;
+
+  const svgStart = text.indexOf('<svg');
+  if (svgStart === -1) return null;
+
+  const svgEnd = text.indexOf('</svg>', svgStart);
+  if (svgEnd === -1) return null;
+
+  const svg = text.substring(svgStart, svgEnd + '</svg>'.length);
+  const before = text.substring(0, svgStart).trim();
+  const after = text.substring(svgEnd + '</svg>'.length).trim();
+
+  return { svg, before, after };
+}
+
 export default function DocumentViewer({ filePath, fileType, title, content }: Props) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -138,45 +155,12 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     }
 
     const displayContent = textFileContent || content || '(fichier vide)';
-    const visual = parseVisualMarker(displayContent);
-    const cleanContent = visual ? stripVisualMarker(displayContent) : displayContent;
-
-    return (
-      <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        {cleanContent ? (
-          <Markdown style={markdownStyles}>{cleanContent}</Markdown>
-        ) : null}
-        {visual ? (
-          <VisualBubble
-            type={visual.type}
-            title={visual.title}
-            code={visual.code}
-          />
-        ) : null}
-      </ScrollView>
-    );
+    return <ContentRenderer content={displayContent} />;
   }
 
   // ===== CONTENU TEXTE SIMPLE (sans fichier) =====
   if (!fileType && content) {
-    // 🆕 A7 v3 : détecter un visuel dans le contenu
-    const visual = parseVisualMarker(content);
-    const cleanContent = visual ? stripVisualMarker(content) : content;
-
-    return (
-      <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        {cleanContent ? (
-          <Markdown style={markdownStyles}>{cleanContent}</Markdown>
-        ) : null}
-        {visual ? (
-          <VisualBubble
-            type={visual.type}
-            title={visual.title}
-            code={visual.code}
-          />
-        ) : null}
-      </ScrollView>
-    );
+    return <ContentRenderer content={content} />;
   }
 
   // ===== FICHIER INCONNU =====
@@ -200,6 +184,58 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
         </View>
       ) : null}
     </View>
+  );
+}
+
+// ============================================================
+// 🆕 RENDERER DE CONTENU : détecte __VISUAL__ et SVG brut
+// ============================================================
+function ContentRenderer({ content }: { content: string }) {
+  // 1. Priorité au marqueur __VISUAL__ (généré par Prof)
+  const visual = parseVisualMarker(content);
+
+  if (visual) {
+    const cleanContent = stripVisualMarker(content);
+    return (
+      <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
+        {cleanContent ? (
+          <Markdown style={markdownStyles}>{cleanContent}</Markdown>
+        ) : null}
+        <VisualBubble
+          type={visual.type}
+          title={visual.title}
+          code={visual.code}
+        />
+      </ScrollView>
+    );
+  }
+
+  // 2. Sinon, détecte un SVG brut (<svg>...</svg>)
+  const rawSvg = detectRawSvg(content);
+
+  if (rawSvg) {
+    return (
+      <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
+        {rawSvg.before ? (
+          <Markdown style={markdownStyles}>{rawSvg.before}</Markdown>
+        ) : null}
+        <VisualBubble
+          type="svg"
+          title="Schéma"
+          code={rawSvg.svg}
+        />
+        {rawSvg.after ? (
+          <Markdown style={markdownStyles}>{rawSvg.after}</Markdown>
+        ) : null}
+      </ScrollView>
+    );
+  }
+
+  // 3. Sinon, rendu Markdown normal
+  return (
+    <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
+      <Markdown style={markdownStyles}>{content}</Markdown>
+    </ScrollView>
   );
 }
 

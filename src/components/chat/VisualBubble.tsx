@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
-import Svg from 'react-native-svg';
 import { WebView } from 'react-native-webview';
 
 import { Colors, Fonts, Spacing } from '@/constants/theme';
@@ -11,55 +10,104 @@ type Props = {
   code: string;
 };
 
+// Échappe les caractères HTML dangereux (mais PAS les balises SVG)
+function escapeForHtmlTemplate(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/`/g, '\\`')
+    .replace(/\${/g, '\\${');
+}
+
 export default function VisualBubble({ type, title, code }: Props) {
   const [isLoading, setIsLoading] = useState(true);
 
-  // ===== SVG direct =====
-  if (type === 'svg') {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.title}>{title}</Text>
-        </View>
-        <View style={styles.svgContainer}>
-          <Svg
-            width="100%"
-            height="250"
-            viewBox="0 0 400 250"
-            style={styles.svg}
-          >
-            {/* Le SVG est injecté via WebView car react-native-svg ne parse pas
-                du SVG brut facilement. Pour simplifier, on rend via WebView. */}
-          </Svg>
-        </View>
-      </View>
-    );
-  }
+  let htmlContent = '';
 
-  // ===== Mermaid / HTML via WebView =====
-  const htmlContent =
-    type === 'mermaid'
-      ? `<!DOCTYPE html>
+  if (type === 'svg') {
+    // ⚠️ Injection DIRECTE dans le body : pas de JavaScript, pas de innerHTML
+    // Le SVG est du XML pur, il ne casse pas le HTML s'il est bien formé.
+    htmlContent = `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <style>
-  body { margin: 0; padding: 12px; background: #F7F9FC; font-family: sans-serif; }
-  .mermaid { display: flex; justify-content: center; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #FFFFFF;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+  .svg-wrapper {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 12px;
+  }
+  .svg-wrapper svg {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    display: block;
+  }
 </style>
 </head>
 <body>
-  <div class="mermaid">
-${code}
+  <div class="svg-wrapper">
+    ${code}
   </div>
+</body>
+</html>`;
+  } else if (type === 'mermaid') {
+    const safeCode = escapeForHtmlTemplate(code);
+    htmlContent = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 12px;
+    background: #FFFFFF;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  .mermaid {
+    display: flex;
+    justify-content: center;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+  <div class="mermaid" id="mermaid-container"></div>
   <script>
-    mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+    (function() {
+      try {
+        var mermaidCode = \`${safeCode}\`;
+        document.getElementById('mermaid-container').textContent = mermaidCode;
+        if (typeof mermaid !== 'undefined') {
+          mermaid.initialize({ startOnLoad: true, theme: 'neutral', securityLevel: 'loose' });
+        }
+      } catch (e) {
+        document.getElementById('mermaid-container').innerHTML = 
+          '<p style="color:red;">Erreur Mermaid: ' + e.message + '</p>';
+      }
+    })();
   </script>
 </body>
-</html>`
-      : code;
+</html>`;
+  } else {
+    htmlContent = code;
+  }
 
   return (
     <View style={styles.container}>
@@ -73,6 +121,11 @@ ${code}
           style={styles.webview}
           onLoadEnd={() => setIsLoading(false)}
           startInLoadingState
+          javaScriptEnabled
+          domStorageEnabled
+          scrollEnabled={false}
+          scalesPageToFit={false}
+          androidLayerType="software"
           renderLoading={() => (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color={Colors.light.primary} />
@@ -105,26 +158,19 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.semibold,
     fontWeight: '600',
   },
-  svgContainer: {
-    padding: Spacing.two,
-    backgroundColor: Colors.light.background,
-  },
-  svg: {
-    backgroundColor: Colors.light.background,
-  },
   webviewContainer: {
-    height: 300,
-    backgroundColor: Colors.light.background,
+    height: 320,
+    backgroundColor: '#FFFFFF',
   },
   webview: {
     flex: 1,
-    backgroundColor: Colors.light.background,
+    backgroundColor: '#FFFFFF',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: Colors.light.background,
+    backgroundColor: '#FFFFFF',
   },
   loadingText: {
     marginTop: Spacing.two,
