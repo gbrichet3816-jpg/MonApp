@@ -12,7 +12,9 @@ import {
 import Markdown from 'react-native-markdown-display';
 import Pdf from 'react-native-pdf';
 
+import VisualBubble from '@/components/chat/VisualBubble';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
+import { parseVisualMarker, stripVisualMarker } from '@/utils/visualParser';
 
 type Props = {
   filePath: string | null;
@@ -136,19 +138,43 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     }
 
     const displayContent = textFileContent || content || '(fichier vide)';
+    const visual = parseVisualMarker(displayContent);
+    const cleanContent = visual ? stripVisualMarker(displayContent) : displayContent;
 
     return (
       <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        <Markdown style={markdownStyles}>{displayContent}</Markdown>
+        {cleanContent ? (
+          <Markdown style={markdownStyles}>{cleanContent}</Markdown>
+        ) : null}
+        {visual ? (
+          <VisualBubble
+            type={visual.type}
+            title={visual.title}
+            code={visual.code}
+          />
+        ) : null}
       </ScrollView>
     );
   }
 
-  // ===== CONTENU TEXTE SIMPLE (sans fichier) — 🆕 A6 : rendu Markdown =====
+  // ===== CONTENU TEXTE SIMPLE (sans fichier) =====
   if (!fileType && content) {
+    // 🆕 A7 v3 : détecter un visuel dans le contenu
+    const visual = parseVisualMarker(content);
+    const cleanContent = visual ? stripVisualMarker(content) : content;
+
     return (
       <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        <Markdown style={markdownStyles}>{content}</Markdown>
+        {cleanContent ? (
+          <Markdown style={markdownStyles}>{cleanContent}</Markdown>
+        ) : null}
+        {visual ? (
+          <VisualBubble
+            type={visual.type}
+            title={visual.title}
+            code={visual.code}
+          />
+        ) : null}
       </ScrollView>
     );
   }

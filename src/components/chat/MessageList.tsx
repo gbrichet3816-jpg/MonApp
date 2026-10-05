@@ -3,6 +3,7 @@ import { FlatList, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Fonts, Spacing } from '@/constants/theme';
 
+import type { VisualData } from '@/utils/visualParser';
 import Message, { type QuizQuestion } from './Message';
 
 export type ChatMessage = {
@@ -16,23 +17,24 @@ export type ChatMessage = {
   // 🆕 A10 : pour bouton Relancer
   isError?: boolean;
   originalText?: string;
+  // 🆕 A7 v3 : visuel
+  visual?: VisualData;
 };
 
 type Props = {
   messages: ChatMessage[];
   emptyText: string;
   onQuizAnswer?: (messageId: string, questionIndex: number, userAnswer: string) => void;
-  // 🆕 A10 : callback pour relancer un message
   onRetry?: (originalText: string) => void;
 };
 
 export default function MessageList({ messages, emptyText, onQuizAnswer, onRetry }: Props) {
   const listRef = useRef<FlatList<ChatMessage>>(null);
 
-  // 🆕 Bug #2 : filtrer les messages techniques
   const visibleMessages = messages.filter((msg) => {
     if (msg.isQuiz) return true;
     if (msg.isDictation) return true;
+    if (msg.visual) return true;
 
     if (!msg.text || !msg.text.trim()) return false;
 
@@ -45,13 +47,10 @@ export default function MessageList({ messages, emptyText, onQuizAnswer, onRetry
     return true;
   });
 
-  // 🆕 Bug #21 + #22 : détecter si le DERNIER message est un quiz actif
-  // (au lieu de regarder si un quiz existe dans l'historique)
   const lastMessage = visibleMessages[visibleMessages.length - 1];
   const hasActiveQuiz = lastMessage?.isQuiz === true;
 
   useEffect(() => {
-    // 🆕 On ne scrolle PAS en bas si le DERNIER message est un quiz actif
     if (hasActiveQuiz) return;
 
     if (visibleMessages.length > 0) {
@@ -86,13 +85,12 @@ export default function MessageList({ messages, emptyText, onQuizAnswer, onRetry
           onQuizAnswer={(questionIndex, userAnswer) => {
             onQuizAnswer?.(item.id, questionIndex, userAnswer);
           }}
-          // 🆕 A10 : bouton Relancer
           isError={item.isError}
           onRetry={item.isError && item.originalText ? () => onRetry?.(item.originalText!) : undefined}
+          visual={item.visual}
         />
       )}
       contentContainerStyle={styles.listContent}
-      // 🆕 Bug #22 : on scrolle si le DERNIER message n'est PAS un quiz
       onContentSizeChange={() => {
         if (hasActiveQuiz) return;
         listRef.current?.scrollToEnd({ animated: true });

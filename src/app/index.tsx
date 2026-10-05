@@ -103,6 +103,7 @@ import { saveFileToDocuments } from '@/config/files';
 import { requestNotificationPermission } from '@/config/notifications';
 import { getLocalProfile } from '@/config/user';
 import { Colors } from '@/constants/theme';
+import type { VisualData } from '@/utils/visualParser';
 
 // ============================================================
 // FONCTIONS UTILITAIRES
@@ -141,7 +142,6 @@ function findToolResult(toolResults: string[], prefix: string): string | null {
   return toolResults.find((r) => r.startsWith(prefix)) || null;
 }
 
-// 🆕 Bug #20 + #22 : détecte si le DERNIER message est un quiz actif
 function hasActiveQuiz(messages: ChatMessage[]): boolean {
   const visibleMessages = messages.filter((m) => m.isQuiz || (m.text && m.text.trim()));
   const last = visibleMessages[visibleMessages.length - 1];
@@ -462,6 +462,15 @@ export default function HomeScreen() {
         const sentences: string[] = args.sentences || [];
         if (!sentences.length) return 'Aucune phrase fournie.';
         return `__DICTATION__:${sentences.join('\n')}`;
+      }
+
+      // 🆕 A7 v3 : génération de visuel
+      if (call.name === 'generateVisual') {
+        const type = args.type || 'svg';
+        const title = args.title || 'Visuel';
+        const code = args.code || '';
+        if (!code) return 'Aucun code fourni.';
+        return `__VISUAL__:${JSON.stringify({ type, title, code })}`;
       }
 
       if (call.name === 'listGrades') {
@@ -927,6 +936,32 @@ export default function HomeScreen() {
           break;
         }
 
+        // 🆕 A7 v3 : visuel
+        const visualResult = findToolResult(allToolResults, '__VISUAL__:');
+        if (visualResult) {
+          const jsonStr = visualResult.replace('__VISUAL__:', '');
+          let visualData: VisualData | null = null;
+          try {
+            visualData = JSON.parse(jsonStr);
+          } catch (e) {
+            console.warn('[Prof] Erreur parsing visual:', e);
+          }
+
+          if (visualData) {
+            const visualMessage: ChatMessage = {
+              id: `agent-visual-${Date.now()}`,
+              text: newResult.reply || '',
+              isUser: false,
+              visual: visualData,
+            };
+            setMessages((prev) => [...prev, visualMessage]);
+            saveMessage({ id: visualMessage.id, agentId: selectedAgent.id, text: '[VISUAL]', isUser: false });
+            messageAlreadyDisplayed = true;
+          }
+          currentResult = newResult;
+          break;
+        }
+
         if (newResult.reply && newResult.reply.trim().length > 0) {
           const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
@@ -945,7 +980,6 @@ export default function HomeScreen() {
             id: `agent-${Date.now()}`,
             text: 'Je n\'ai pas réussi à formuler une réponse. Réessaie avec un autre message 😅',
             isUser: false,
-            // 🆕 A10 : bouton Relancer
             isError: true,
             originalText: text,
           };
@@ -967,7 +1001,6 @@ export default function HomeScreen() {
         id: `error-${Date.now()}`,
         text: `Erreur : ${error instanceof Error ? error.message : 'inconnue'}`,
         isUser: false,
-        // 🆕 A10 : bouton Relancer
         isError: true,
         originalText: text,
       };
@@ -980,9 +1013,7 @@ export default function HomeScreen() {
 
   // 🆕 A10 : relancer un message
   const handleRetry = async (originalText: string) => {
-    // Supprime la bulle d'erreur
     setMessages((prev) => prev.filter((m) => !(m.isError && m.originalText === originalText)));
-    // Relance le message
     await handleSend(originalText);
   };
 
@@ -1181,6 +1212,26 @@ export default function HomeScreen() {
           break;
         }
 
+        // 🆕 A7 v3 : visuel (handleFileSend)
+        const visualResult = findToolResult(allToolResults, '__VISUAL__:');
+        if (visualResult) {
+          const jsonStr = visualResult.replace('__VISUAL__:', '');
+          try {
+            const visualData = JSON.parse(jsonStr);
+            const visualMessage: ChatMessage = {
+              id: `agent-visual-${Date.now()}`,
+              text: newResult.reply || '',
+              isUser: false,
+              visual: visualData,
+            };
+            setMessages((prev) => [...prev, visualMessage]);
+            saveMessage({ id: visualMessage.id, agentId: selectedAgent.id, text: '[VISUAL]', isUser: false });
+            messageAlreadyDisplayed = true;
+          } catch (e) { console.warn('[Prof] Parsing visual:', e); }
+          currentResult = newResult;
+          break;
+        }
+
         if (newResult.reply && newResult.reply.trim().length > 0) {
           const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
@@ -1372,6 +1423,26 @@ export default function HomeScreen() {
           break;
         }
 
+        // 🆕 A7 v3 : visuel (handlePhotoSend)
+        const visualResult = findToolResult(allToolResults, '__VISUAL__:');
+        if (visualResult) {
+          const jsonStr = visualResult.replace('__VISUAL__:', '');
+          try {
+            const visualData = JSON.parse(jsonStr);
+            const visualMessage: ChatMessage = {
+              id: `agent-visual-${Date.now()}`,
+              text: newResult.reply || '',
+              isUser: false,
+              visual: visualData,
+            };
+            setMessages((prev) => [...prev, visualMessage]);
+            saveMessage({ id: visualMessage.id, agentId: selectedAgent.id, text: '[VISUAL]', isUser: false });
+            messageAlreadyDisplayed = true;
+          } catch (e) { console.warn('[Prof] Parsing visual:', e); }
+          currentResult = newResult;
+          break;
+        }
+
         if (newResult.reply && newResult.reply.trim().length > 0) {
           const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
@@ -1435,7 +1506,6 @@ export default function HomeScreen() {
   ) => {
     console.log('[Quiz] Réponse:', { messageId, questionIndex, userAnswer });
 
-    // 🆕 A1 : si l'enfant arrête le quiz
     if (questionIndex === -1 && userAnswer.startsWith('STOP:')) {
       await handleStopQuiz(messageId);
       return;

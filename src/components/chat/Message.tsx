@@ -16,6 +16,8 @@ import { speakText, speakTextSlow, stopSpeaking } from '@/config/speech';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { answersMatchLocal, looksAlmostCorrect } from '@/utils/answerMatch';
+import type { VisualData } from '@/utils/visualParser';
+import VisualBubble from './VisualBubble';
 
 export type QuizQuestion = {
   question: string;
@@ -36,6 +38,8 @@ type Props = {
   onRetry?: () => void;
   // 🆕 A1 : bouton Arrêter le quiz
   onStopQuiz?: () => void;
+  // 🆕 A7 v3 : visuel
+  visual?: VisualData;
 };
 
 // Nettoyage des balises internes DeepSeek (<||DSML||> etc.)
@@ -62,6 +66,7 @@ export default function Message({
   isError = false,
   onRetry,
   onStopQuiz,
+  visual,
 }: Props) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRevealed, setIsRevealed] = useState(false);
@@ -318,7 +323,6 @@ export default function Message({
       if (onStopQuiz) {
         onStopQuiz();
       } else {
-        // Fallback : informer Prof que l'enfant a arrêté
         onQuizAnswer?.(-1, `STOP:${correctCount}/${currentIndex}`);
       }
     };
@@ -353,13 +357,11 @@ export default function Message({
     return (
       <View style={[styles.container, styles.agentContainer]}>
         <View style={[styles.bubble, styles.agentBubble, styles.quizBubble]}>
-          {/* 🆕 Bug #24 : header restructuré (titre tronqué + Question sur 2ème ligne) */}
           <View style={styles.quizTopRow}>
             <Ionicons name="help-circle-outline" size={16} color={Colors.light.primary} />
             <Text style={styles.quizLabel} numberOfLines={1} ellipsizeMode="tail">
               {quizTitle || 'Quiz'}
             </Text>
-            {/* 🆕 A1 : bouton Arrêter le quiz */}
             <TouchableOpacity style={styles.quizStopButton} onPress={handleStopQuiz}>
               <Ionicons name="close-circle-outline" size={20} color={Colors.light.error} />
             </TouchableOpacity>
@@ -570,7 +572,7 @@ export default function Message({
   }
 
   // ============================================================
-  // MODE MESSAGE NORMAL (avec Markdown + bouton Relancer)
+  // MODE MESSAGE NORMAL (avec Markdown + bouton Relancer + visuel)
   // ============================================================
   const cleanedText = isUser ? text : cleanDsmlTags(text);
 
@@ -595,13 +597,30 @@ export default function Message({
     );
   }
 
+  // 🆕 A7 v3 : rendu du visuel si présent
+  if (visual) {
+    return (
+      <View style={[styles.container, styles.agentContainer]}>
+        <View style={[styles.bubble, styles.agentBubble, { maxWidth: '95%' }]}>
+          {cleanedText ? (
+            <Markdown style={markdownStyles}>{cleanedText}</Markdown>
+          ) : null}
+          <VisualBubble
+            type={visual.type}
+            title={visual.title}
+            code={visual.code}
+          />
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, isUser ? styles.userContainer : styles.agentContainer]}>
       <View style={[styles.bubble, isUser ? styles.userBubble : styles.agentBubble]}>
         {isUser ? (
           <Text style={[styles.text, styles.userText]}>{cleanedText}</Text>
         ) : (
-          // 🆕 A8 : rendu Markdown pour les messages de Prof
           <Markdown style={markdownStyles}>{cleanedText}</Markdown>
         )}
 
@@ -742,7 +761,7 @@ const styles = StyleSheet.create({
   dictationRevealedText: { fontSize: 15, fontFamily: Fonts.regular, color: Colors.light.text, lineHeight: 22, marginBottom: Spacing.one },
   dictationRevealedTextActive: { fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.primary },
 
-  // 🆕 Bug #24 : quiz header restructuré
+  // Quiz
   quizBubble: { backgroundColor: '#E8F5E9', borderWidth: 2, borderColor: '#2E7D32', minWidth: 280 },
   quizFinishedBubble: { backgroundColor: '#FFF3E0', borderColor: '#FFB300' },
   quizFinishedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#2E7D32', paddingHorizontal: Spacing.two, paddingVertical: 2, borderRadius: Spacing.one, marginLeft: 'auto' },
