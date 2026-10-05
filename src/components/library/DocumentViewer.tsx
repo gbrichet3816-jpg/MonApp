@@ -11,8 +11,8 @@ import {
 } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import Pdf from 'react-native-pdf';
+import { WebView } from 'react-native-webview';
 
-import VisualBubble from '@/components/chat/VisualBubble';
 import { Colors, Fonts, Spacing } from '@/constants/theme';
 import { parseVisualMarker, stripVisualMarker } from '@/utils/visualParser';
 
@@ -23,72 +23,59 @@ type Props = {
   content: string;
 };
 
-// Détecte un SVG brut
-function detectRawSvg(text: string): { svg: string; before: string; after: string } | null {
+// 🎯 Détecte un HTML complet (DOCTYPE ou beaucoup de balises HTML)
+// → C'est ce qui est envoyé par Prof pour les fiches de révision
+function detectFullHtml(text: string): string | null {
   if (!text) return null;
+
+  // Cas 1 : DOCTYPE complet
+  const doctypeIdx = text.indexOf('<!DOCTYPE');
+  if (doctypeIdx !== -1) {
+    return text.substring(doctypeIdx).trim();
+  }
+
+  // Cas 2 : beaucoup de balises HTML structurantes
+  const htmlCount = (text.match(/<(h1|h2|h3|table|tr|td|div|section|article|ul|ol|p)\b/gi) || []).length;
+  if (htmlCount >= 5) {
+    return text.trim();
+  }
+
+  return null;
+}
+
+// Détecte un SVG ISOLÉ (pas dans du HTML)
+function detectIsolatedSvg(text: string): string | null {
+  if (!text) return null;
+
+  // Si c'est du HTML complet, on ne traite pas comme SVG isolé
+  if (detectFullHtml(text)) return null;
+
   const svgStart = text.indexOf('<svg');
   if (svgStart === -1) return null;
   const svgEnd = text.indexOf('</svg>', svgStart);
   if (svgEnd === -1) return null;
-  const svg = text.substring(svgStart, svgEnd + '</svg>'.length);
-  const before = text.substring(0, svgStart).trim();
-  const after = text.substring(svgEnd + '</svg>'.length).trim();
-  return { svg, before, after };
+  return text.substring(svgStart, svgEnd + '</svg>'.length);
 }
 
-// Détecte un Mermaid brut
-function detectRawMermaid(text: string): { mermaid: string; before: string; after: string } | null {
+// Détecte un Mermaid ISOLÉ
+function detectIsolatedMermaid(text: string): string | null {
   if (!text) return null;
+  if (detectFullHtml(text)) return null;
+
   const keywords = [
     'flowchart ', 'flowchart\n', 'graph TD', 'graph LR', 'graph TB', 'graph BT',
     'timeline\n', 'timeline\r\n', 'mindmap\n', 'mindmap\r\n',
     'sequenceDiagram', 'classDiagram', 'stateDiagram', 'pie title', 'gantt',
   ];
+
   for (const kw of keywords) {
     const idx = text.indexOf(kw);
     if (idx === -1) continue;
     const after = text.substring(idx);
     const stopMatch = after.match(/\n(#{1,3} |---|\*\*[A-ZÉÈÀ]|```)/);
     const endIdx = stopMatch ? idx + stopMatch.index! : text.length;
-    const mermaid = text.substring(idx, endIdx).trim();
-    const before = text.substring(0, idx).trim();
-    const afterClean = text.substring(endIdx).trim();
-    return { mermaid, before, after: afterClean };
+    return text.substring(idx, endIdx).trim();
   }
-  return null;
-}
-
-// 🆕 Détecte du HTML brut (h1, table, div, DOCTYPE...)
-function detectRawHtml(text: string): { html: string; before: string; after: string } | null {
-  if (!text) return null;
-
-  // Cas 1 : DOCTYPE complet
-  const doctypeIdx = text.indexOf('<!DOCTYPE');
-  if (doctypeIdx !== -1) {
-    const after = text.substring(doctypeIdx);
-    const stopMatch = after.match(/<\/html>/i);
-    const endIdx = stopMatch ? doctypeIdx + stopMatch.index! + '</html>'.length : text.length;
-    const html = text.substring(doctypeIdx, endIdx).trim();
-    const before = text.substring(0, doctypeIdx).trim();
-    const afterClean = text.substring(endIdx).trim();
-    return { html, before, after: afterClean };
-  }
-
-  // Cas 2 : fragments HTML avec balises structurantes
-  const htmlTags = ['<h1>', '<h2>', '<table', '<div', '<section', '<article'];
-  for (const tag of htmlTags) {
-    const idx = text.indexOf(tag);
-    if (idx === -1) continue;
-
-    // Vérifie qu'il y a au moins 2 balises HTML structurantes (pour éviter les faux positifs)
-    const htmlCount = (text.match(/<(h1|h2|h3|table|tr|td|div|section|article|ul|ol)\b/gi) || []).length;
-    if (htmlCount < 3) continue;
-
-    const html = text.substring(idx).trim();
-    const before = text.substring(0, idx).trim();
-    return { html, before, after: '' };
-  }
-
   return null;
 }
 
@@ -125,6 +112,7 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     }
   };
 
+  // ===== IMAGE =====
   if (isImage && filePath) {
     return (
       <View style={styles.container}>
@@ -149,6 +137,7 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     );
   }
 
+  // ===== PDF =====
   if (isPdf && filePath) {
     return (
       <View style={styles.container}>
@@ -172,6 +161,7 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     );
   }
 
+  // ===== TEXTE =====
   if (isText) {
     if (isLoading) {
       return (
@@ -192,8 +182,12 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     return <ContentRenderer content={textFileContent || content || '(vide)'} />;
   }
 
-  if (!fileType && content) return <ContentRenderer content={content} />;
+  // ===== CONTENU SANS FICHIER =====
+  if (!fileType && content) {
+    return <ContentRenderer content={content} />;
+  }
 
+  // ===== INCONNU =====
   return (
     <View style={styles.unknownContainer}>
       <Ionicons name="document" size={64} color={Colors.light.primary} />
@@ -203,56 +197,58 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
   );
 }
 
+// ============================================================
+// RENDERER DE CONTENU
+// ============================================================
 function ContentRenderer({ content }: { content: string }) {
-  // 1. Marqueur __VISUAL__
+  // 1️⃣ PRIORITÉ ABSOLUE : HTML complet (fiche de révision)
+  //    → On rend TOUT dans un WebView, jamais de Markdown par-dessus
+  const fullHtml = detectFullHtml(content);
+  if (fullHtml) {
+    return (
+      <View style={styles.fullscreenContainer}>
+        <FullscreenVisual type="html" title="Fiche" code={fullHtml} />
+      </View>
+    );
+  }
+
+  // 2️⃣ Marqueur __VISUAL__ (visuel généré par Prof)
   const visual = parseVisualMarker(content);
   if (visual) {
     const cleanContent = stripVisualMarker(content);
     return (
-      <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        {cleanContent ? <Markdown style={markdownStyles}>{cleanContent}</Markdown> : null}
-        <VisualBubble type={visual.type} title={visual.title} code={visual.code} />
-      </ScrollView>
+      <View style={styles.fullscreenContainer}>
+        <FullscreenVisual type={visual.type} title={visual.title} code={visual.code} />
+        {cleanContent ? (
+          <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
+            <Markdown style={markdownStyles}>{cleanContent}</Markdown>
+          </ScrollView>
+        ) : null}
+      </View>
     );
   }
 
-  // 2. SVG brut
-  const rawSvg = detectRawSvg(content);
-  if (rawSvg) {
+  // 3️⃣ SVG isolé
+  const svg = detectIsolatedSvg(content);
+  if (svg) {
     return (
-      <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        {rawSvg.before ? <Markdown style={markdownStyles}>{rawSvg.before}</Markdown> : null}
-        <VisualBubble type="svg" title="Schéma" code={rawSvg.svg} />
-        {rawSvg.after ? <Markdown style={markdownStyles}>{rawSvg.after}</Markdown> : null}
-      </ScrollView>
+      <View style={styles.fullscreenContainer}>
+        <FullscreenVisual type="svg" title="Schéma" code={svg} />
+      </View>
     );
   }
 
-  // 3. Mermaid brut
-  const rawMermaid = detectRawMermaid(content);
-  if (rawMermaid) {
+  // 4️⃣ Mermaid isolé
+  const mermaid = detectIsolatedMermaid(content);
+  if (mermaid) {
     return (
-      <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        {rawMermaid.before ? <Markdown style={markdownStyles}>{rawMermaid.before}</Markdown> : null}
-        <VisualBubble type="mermaid" title="Diagramme" code={rawMermaid.mermaid} />
-        {rawMermaid.after ? <Markdown style={markdownStyles}>{rawMermaid.after}</Markdown> : null}
-      </ScrollView>
+      <View style={styles.fullscreenContainer}>
+        <FullscreenVisual type="mermaid" title="Diagramme" code={mermaid} />
+      </View>
     );
   }
 
-  // 4. HTML brut
-  const rawHtml = detectRawHtml(content);
-  if (rawHtml) {
-    return (
-      <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        {rawHtml.before ? <Markdown style={markdownStyles}>{rawHtml.before}</Markdown> : null}
-        <VisualBubble type="html" title="Fiche" code={rawHtml.html} />
-        {rawHtml.after ? <Markdown style={markdownStyles}>{rawHtml.after}</Markdown> : null}
-      </ScrollView>
-    );
-  }
-
-  // 5. Markdown normal
+  // 5️⃣ Markdown normal
   return (
     <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
       <Markdown style={markdownStyles}>{content}</Markdown>
@@ -260,6 +256,106 @@ function ContentRenderer({ content }: { content: string }) {
   );
 }
 
+// ============================================================
+// Rendu plein écran
+// ============================================================
+function FullscreenVisual({
+  type,
+  title,
+  code,
+}: {
+  type: 'svg' | 'mermaid' | 'html';
+  title: string;
+  code: string;
+}) {
+  let htmlContent = '';
+
+  if (type === 'svg') {
+    htmlContent = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; overflow: auto; -webkit-overflow-scrolling: touch; }
+  .wrap { padding: 16px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+  .wrap svg { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+  <div class="wrap">${code}</div>
+</body>
+</html>`;
+  } else if (type === 'mermaid') {
+    const escaped = code.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
+    htmlContent = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; overflow: auto; -webkit-overflow-scrolling: touch; }
+  #content { padding: 16px; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; }
+  #content svg { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+  <div id="content"><div class="mermaid" id="mermaid-container"></div></div>
+  <script>
+    (function() {
+      try {
+        var mermaidCode = \`${escaped}\`;
+        mermaid.initialize({
+          startOnLoad: false, theme: 'neutral', securityLevel: 'loose',
+          flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' },
+          timeline: { useMaxWidth: true }, mindmap: { useMaxWidth: true }
+        });
+        mermaid.render('m-svg-' + Date.now(), mermaidCode).then(function(r) {
+          document.getElementById('mermaid-container').innerHTML = r.svg;
+        }).catch(function(err) {
+          document.getElementById('mermaid-container').innerHTML = 
+            '<pre style="color:#C62828;padding:12px;white-space:pre-wrap;">Erreur Mermaid: ' + (err.message || err) + '</pre>';
+        });
+      } catch (e) {
+        document.getElementById('mermaid-container').innerHTML = 
+          '<pre style="color:#C62828;padding:12px;">Erreur: ' + e.message + '</pre>';
+      }
+    })();
+  </script>
+</body>
+</html>`;
+  } else {
+    // HTML : on envoie le code TEL QUEL (le WebView le rendra)
+    htmlContent = code;
+  }
+
+  return (
+    <WebView
+      originWhitelist={['*']}
+      source={{ html: htmlContent }}
+      style={styles.fullscreenWebview}
+      javaScriptEnabled
+      domStorageEnabled
+      scrollEnabled
+      bounces={false}
+      scalesPageToFit
+      setBuiltInZoomControls
+      androidLayerType="software"
+      startInLoadingState
+      renderLoading={() => (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={Colors.light.primary} />
+          <Text style={styles.loaderText}>Chargement…</Text>
+        </View>
+      )}
+    />
+  );
+}
+
+// Décode le base64 en texte UTF-8
 function decodeBase64Utf8(base64: string): string {
   try {
     const binaryString = (global as any).atob
@@ -293,7 +389,9 @@ const markdownStyles = {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.two },
+  fullscreenContainer: { flex: 1, backgroundColor: Colors.light.background },
+  fullscreenWebview: { flex: 1, backgroundColor: '#FFFFFF' },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: Spacing.two, backgroundColor: '#FFFFFF' },
   fullImage: { flex: 1, width: '100%' },
   pdf: { flex: 1, width: '100%', backgroundColor: Colors.light.backgroundElement },
   loaderOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.9)', gap: Spacing.two },
