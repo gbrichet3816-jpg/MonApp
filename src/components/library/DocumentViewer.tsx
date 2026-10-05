@@ -24,7 +24,7 @@ type Props = {
 };
 
 // 🎯 Détecte un HTML complet (DOCTYPE ou beaucoup de balises HTML)
-// → C'est ce qui est envoyé par Prof pour les fiches de révision
+// → PRIORITÉ ABSOLUE : si détecté, TOUT passe en WebView
 function detectFullHtml(text: string): string | null {
   if (!text) return null;
 
@@ -34,7 +34,7 @@ function detectFullHtml(text: string): string | null {
     return text.substring(doctypeIdx).trim();
   }
 
-  // Cas 2 : beaucoup de balises HTML structurantes
+  // Cas 2 : beaucoup de balises HTML structurantes (fallback)
   const htmlCount = (text.match(/<(h1|h2|h3|table|tr|td|div|section|article|ul|ol|p)\b/gi) || []).length;
   if (htmlCount >= 5) {
     return text.trim();
@@ -46,8 +46,6 @@ function detectFullHtml(text: string): string | null {
 // Détecte un SVG ISOLÉ (pas dans du HTML)
 function detectIsolatedSvg(text: string): string | null {
   if (!text) return null;
-
-  // Si c'est du HTML complet, on ne traite pas comme SVG isolé
   if (detectFullHtml(text)) return null;
 
   const svgStart = text.indexOf('<svg');
@@ -201,8 +199,8 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
 // RENDERER DE CONTENU
 // ============================================================
 function ContentRenderer({ content }: { content: string }) {
-  // 1️⃣ PRIORITÉ ABSOLUE : HTML complet (fiche de révision)
-  //    → On rend TOUT dans un WebView, jamais de Markdown par-dessus
+  // 1️⃣ PRIORITÉ ABSOLUE : HTML complet (fiches de révision)
+  //    → Tout dans le WebView, JAMAIS de Markdown par-dessus
   const fullHtml = detectFullHtml(content);
   if (fullHtml) {
     return (
@@ -328,7 +326,7 @@ function FullscreenVisual({
 </body>
 </html>`;
   } else {
-    // HTML : on envoie le code TEL QUEL (le WebView le rendra)
+    // HTML : envoi TEL QUEL (le WebView le rendra)
     htmlContent = code;
   }
 

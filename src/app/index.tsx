@@ -1,3 +1,5 @@
+import * as Linking from 'expo-linking';
+import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, AppState, KeyboardAvoidingView, LogBox, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -153,6 +155,9 @@ function hasActiveQuiz(messages: ChatMessage[]): boolean {
 // ============================================================
 
 export default function HomeScreen() {
+  // 🆕 Deep link : paramètre "notion" depuis app/prof.tsx
+  const params = useLocalSearchParams();
+
   const [agentMenuVisible, setAgentMenuVisible] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>('prof');
@@ -164,6 +169,7 @@ export default function HomeScreen() {
   const [fileModalVisible, setFileModalVisible] = useState(false);
   const [pendingPhoto, setPendingPhoto] = useState<{ uri: string; base64?: string } | null>(null);
   const [photoModalVisible, setPhotoModalVisible] = useState(false);
+  const [prefillText, setPrefillText] = useState('');
   const isMounted = useRef(true);
 
   useEffect(() => {
@@ -184,6 +190,41 @@ export default function HomeScreen() {
     });
     return () => subscription.remove();
   }, []);
+
+  // 🆕 Deep link : intercepter les URLs entrantes (cas appli déjà ouverte)
+  useEffect(() => {
+    const handleUrl = (url: string | null) => {
+      if (!url) return;
+      try {
+        const parsed = Linking.parse(url);
+        console.log('🔗 Deep link reçu:', parsed);
+
+        // Ignorer les deep links de Metro/dev-client
+        if (parsed.scheme?.startsWith('exp+')) return;
+
+        if (parsed.path === 'prof' && parsed.queryParams?.notion) {
+          const notion = String(parsed.queryParams.notion);
+          setSelectedAgentId('prof');
+          setPrefillText(`Explique-moi ${notion}`);
+        }
+      } catch (e) {
+        console.warn('Erreur parsing deep link:', e);
+      }
+    };
+
+    Linking.getInitialURL().then(handleUrl);
+    const sub = Linking.addEventListener('url', (e) => handleUrl(e.url));
+    return () => sub.remove();
+  }, []);
+
+  // 🆕 Deep link : paramètre "notion" depuis app/prof.tsx (redirection)
+  useEffect(() => {
+    if (params.notion && typeof params.notion === 'string') {
+      console.log('🔗 Notion depuis deep link (redirect):', params.notion);
+      setSelectedAgentId('prof');
+      setPrefillText(`Explique-moi ${params.notion}`);
+    }
+  }, [params.notion]);
 
   useEffect(() => {
     if (selectedAgentId) {
@@ -464,7 +505,6 @@ export default function HomeScreen() {
         return `__DICTATION__:${sentences.join('\n')}`;
       }
 
-      // 🆕 A7 v3 : génération de visuel
       if (call.name === 'generateVisual') {
         const type = args.type || 'svg';
         const title = args.title || 'Visuel';
@@ -473,7 +513,6 @@ export default function HomeScreen() {
         return `__VISUAL__:${JSON.stringify({ type, title, code })}`;
       }
 
-      // 🆕 A11 : fiche de révision
       if (call.name === 'createRevisionSheet') {
         const subject = args.subject || 'Général';
         const topic = args.topic || 'Fiche';
@@ -969,7 +1008,6 @@ export default function HomeScreen() {
           break;
         }
 
-        // 🆕 A7 v3 : visuel
         const visualResult = findToolResult(allToolResults, '__VISUAL__:');
         if (visualResult) {
           const jsonStr = visualResult.replace('__VISUAL__:', '');
@@ -1044,13 +1082,11 @@ export default function HomeScreen() {
     }
   };
 
-  // 🆕 A10 : relancer un message
   const handleRetry = async (originalText: string) => {
     setMessages((prev) => prev.filter((m) => !(m.isError && m.originalText === originalText)));
     await handleSend(originalText);
   };
 
-  // 🆕 A1 : arrêter le quiz
   const handleStopQuiz = async (messageId: string) => {
     if (!selectedAgent) return;
 
@@ -1620,6 +1656,8 @@ export default function HomeScreen() {
           onPhotoTaken={handlePhotoTaken}
           disabled={!selectedAgent || isLoading}
           micDisabled={hasActiveQuiz(messages)}
+          prefillText={prefillText}
+          onPrefillConsumed={() => setPrefillText('')}
         />
       </KeyboardAvoidingView>
       <AgentMenu

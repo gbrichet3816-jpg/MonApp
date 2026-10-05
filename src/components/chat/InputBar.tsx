@@ -12,9 +12,13 @@ type Props = {
   onFilePicked?: (file: ImportedFile) => void;
   onPhotoTaken?: (photoUri: string, base64?: string) => void;
   disabled?: boolean;
-  /** 🆕 Désactive complètement le micro (utile pendant un quiz) */
+  /** Désactive complètement le micro (utile pendant un quiz) */
   micDisabled?: boolean;
   placeholder?: string;
+  /** 🆕 Texte à pré-remplir (deep link, action externe) */
+  prefillText?: string;
+  /** 🆕 Callback appelé quand le pré-remplissage a été consommé */
+  onPrefillConsumed?: () => void;
 };
 
 export default function InputBar({
@@ -24,25 +28,34 @@ export default function InputBar({
   disabled = false,
   micDisabled = false,
   placeholder = 'Écris un message...',
+  prefillText,
+  onPrefillConsumed,
 }: Props) {
   const [text, setText] = useState('');
   const [fileImporterVisible, setFileImporterVisible] = useState(false);
 
   const { isListening, error, start, stop, cancel } = useSpeechRecognition({
     onResult: (transcript) => {
-      // 🆕 Si le micro est désactivé, on ignore le résultat
       if (micDisabled) return;
       setText(transcript);
     },
   });
 
-  // 🆕 Bug #20 : si micDisabled devient true, on arrête immédiatement le micro
+  // 🆕 Deep link : applique le texte pré-rempli
+  useEffect(() => {
+    if (prefillText && prefillText.trim().length > 0) {
+      setText(prefillText);
+      onPrefillConsumed?.();
+    }
+  }, [prefillText]);
+
+  // Bug #20 : si micDisabled devient true, on arrête immédiatement le micro
   useEffect(() => {
     if (micDisabled && isListening) {
       try {
         stop();
       } catch {}
-      setText('');   // On efface le texte dicté en cours
+      setText('');
     }
   }, [micDisabled, isListening]);
 
