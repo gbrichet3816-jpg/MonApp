@@ -473,6 +473,39 @@ export default function HomeScreen() {
         return `__VISUAL__:${JSON.stringify({ type, title, code })}`;
       }
 
+      // 🆕 A11 : fiche de révision
+      if (call.name === 'createRevisionSheet') {
+        const subject = args.subject || 'Général';
+        const topic = args.topic || 'Fiche';
+        const title = args.title || `Fiche : ${topic} — ${subject}`;
+        const contentHtml = args.content_html || '';
+        if (!contentHtml) return 'Aucun contenu HTML fourni.';
+
+        const docId = `sheet-${Date.now()}`;
+        saveDocument({
+          id: docId,
+          agentId,
+          title,
+          content: contentHtml,
+        });
+
+        const confirmationMessage = `📄 Ta fiche de révision est prête : "${title}"\n\nTu la retrouveras dans ta bibliothèque (icône 📚 en haut).`;
+        const confirmationMsg: ChatMessage = {
+          id: `agent-sheet-${Date.now()}`,
+          text: confirmationMessage,
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, confirmationMsg]);
+        saveMessage({
+          id: confirmationMsg.id,
+          agentId,
+          text: confirmationMsg.text,
+          isUser: false,
+        });
+
+        return `Fiche enregistrée : ${title}`;
+      }
+
       if (call.name === 'listGrades') {
         const events = await getEventsWithGrades(profDb, userId);
         if (events.length === 0) {
@@ -1212,7 +1245,6 @@ export default function HomeScreen() {
           break;
         }
 
-        // 🆕 A7 v3 : visuel (handleFileSend)
         const visualResult = findToolResult(allToolResults, '__VISUAL__:');
         if (visualResult) {
           const jsonStr = visualResult.replace('__VISUAL__:', '');
@@ -1423,7 +1455,6 @@ export default function HomeScreen() {
           break;
         }
 
-        // 🆕 A7 v3 : visuel (handlePhotoSend)
         const visualResult = findToolResult(allToolResults, '__VISUAL__:');
         if (visualResult) {
           const jsonStr = visualResult.replace('__VISUAL__:', '');
