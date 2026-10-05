@@ -9,9 +9,10 @@ import {
   Text,
   View,
 } from 'react-native';
+import Markdown from 'react-native-markdown-display';
 import Pdf from 'react-native-pdf';
 
-import { Colors, Spacing } from '@/constants/theme';
+import { Colors, Fonts, Spacing } from '@/constants/theme';
 
 type Props = {
   filePath: string | null;
@@ -32,7 +33,6 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
     fileType?.includes('json') ||
     fileType === 'application/octet-stream';
 
-  // Charge le contenu du fichier texte
   useEffect(() => {
     if (isText && filePath) {
       loadTextFile();
@@ -139,20 +139,16 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
 
     return (
       <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        <Text style={styles.textContentText} selectable>
-          {displayContent}
-        </Text>
+        <Markdown style={markdownStyles}>{displayContent}</Markdown>
       </ScrollView>
     );
   }
 
-  // ===== CONTENU TEXTE SIMPLE (sans fichier) =====
+  // ===== CONTENU TEXTE SIMPLE (sans fichier) — 🆕 A6 : rendu Markdown =====
   if (!fileType && content) {
     return (
       <ScrollView style={styles.textContainer} contentContainerStyle={styles.textContent}>
-        <Text style={styles.textContentText} selectable>
-          {content}
-        </Text>
+        <Markdown style={markdownStyles}>{content}</Markdown>
       </ScrollView>
     );
   }
@@ -174,7 +170,7 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
       </Text>
       {content ? (
         <View style={styles.unknownContentBox}>
-          <Text style={styles.unknownContentText}>{content}</Text>
+          <Markdown style={markdownStyles}>{content}</Markdown>
         </View>
       ) : null}
     </View>
@@ -199,6 +195,95 @@ function decodeBase64Utf8(base64: string): string {
     return '';
   }
 }
+
+// 🆕 A6 : styles Markdown pour les documents
+const markdownStyles = {
+  body: {
+    fontSize: 15,
+    lineHeight: 23,
+    fontFamily: Fonts.regular,
+    color: Colors.light.text,
+  },
+  strong: {
+    fontFamily: Fonts.bold,
+    fontWeight: '700' as const,
+  },
+  em: {
+    fontStyle: 'italic' as const,
+    fontFamily: Fonts.regular,
+  },
+  heading1: {
+    fontSize: 22,
+    fontFamily: Fonts.bold,
+    fontWeight: '700' as const,
+    color: Colors.light.primary,
+    marginTop: 16,
+    marginBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    paddingBottom: 4,
+  },
+  heading2: {
+    fontSize: 18,
+    fontFamily: Fonts.bold,
+    fontWeight: '700' as const,
+    color: Colors.light.primary,
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  heading3: {
+    fontSize: 16,
+    fontFamily: Fonts.semibold,
+    fontWeight: '600' as const,
+    color: Colors.light.text,
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  bullet_list: {
+    marginVertical: 6,
+  },
+  ordered_list: {
+    marginVertical: 6,
+  },
+  list_item: {
+    marginVertical: 3,
+  },
+  code_inline: {
+    backgroundColor: '#F0F0F0',
+    color: '#C7254E',
+    paddingHorizontal: 5,
+    borderRadius: 3,
+    fontFamily: 'monospace',
+    fontSize: 14,
+  },
+  fence: {
+    backgroundColor: '#F5F5F5',
+    padding: 10,
+    borderRadius: 6,
+    fontFamily: 'monospace',
+    fontSize: 13,
+    marginVertical: 8,
+  },
+  blockquote: {
+    borderLeftWidth: 4,
+    borderLeftColor: Colors.light.primary,
+    paddingLeft: 12,
+    paddingVertical: 4,
+    fontStyle: 'italic' as const,
+    color: Colors.light.textSecondary,
+    marginVertical: 6,
+    backgroundColor: Colors.light.backgroundElement,
+  },
+  link: {
+    color: Colors.light.primary,
+    textDecorationLine: 'underline' as const,
+  },
+  hr: {
+    backgroundColor: Colors.light.border,
+    height: 1,
+    marginVertical: 12,
+  },
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -233,10 +318,12 @@ const styles = StyleSheet.create({
   },
   loaderText: {
     fontSize: 14,
+    fontFamily: Fonts.regular,
     color: Colors.light.textSecondary,
   },
   errorText: {
     fontSize: 14,
+    fontFamily: Fonts.regular,
     color: Colors.light.error,
     textAlign: 'center',
     padding: Spacing.four,
@@ -251,8 +338,8 @@ const styles = StyleSheet.create({
   textContentText: {
     fontSize: 15,
     lineHeight: 23,
+    fontFamily: Fonts.regular,
     color: Colors.light.text,
-    fontFamily: 'monospace',
   },
   unknownContainer: {
     flex: 1,
@@ -263,18 +350,21 @@ const styles = StyleSheet.create({
   },
   unknownTitle: {
     fontSize: 20,
-    fontWeight: '600',
+    fontFamily: Fonts.semibold,
+    fontWeight: '600' as const,
     color: Colors.light.text,
     textAlign: 'center',
   },
   unknownText: {
     fontSize: 14,
+    fontFamily: Fonts.regular,
     color: Colors.light.textSecondary,
   },
   unknownHint: {
     fontSize: 13,
+    fontFamily: Fonts.regular,
     color: Colors.light.textSecondary,
-    fontStyle: 'italic',
+    fontStyle: 'italic' as const,
     textAlign: 'center',
   },
   unknownContentBox: {
@@ -286,6 +376,7 @@ const styles = StyleSheet.create({
   },
   unknownContentText: {
     fontSize: 14,
+    fontFamily: Fonts.regular,
     color: Colors.light.text,
     lineHeight: 20,
   },

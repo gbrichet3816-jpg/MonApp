@@ -2,6 +2,51 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 
+/**
+ * 🆕 A6 : Convertit du Markdown basique en HTML propre pour PDF.
+ */
+function markdownToHtml(content: string): string {
+  // Échappe d'abord les caractères HTML
+  let html = content
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Titres (# ## ###)
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Gras (**texte**)
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+  // Italique (*texte*)
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // Code inline (`texte`)
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Listes à puces (- item)
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  // Wrap les <li> consécutifs dans <ul>
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, (match) => `<ul>${match}</ul>`);
+
+  // Listes numérotées (1. item)
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+
+  // Citations (> texte)
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // Séparateurs (---)
+  html = html.replace(/^---$/gm, '<hr/>');
+
+  // Sauts de ligne restants
+  html = html.replace(/\n\n/g, '</p><p>');
+  html = html.replace(/\n/g, '<br/>');
+
+  return `<p>${html}</p>`;
+}
+
 export async function generatePdf({
   title,
   content,
@@ -19,11 +64,8 @@ export async function generatePdf({
       year: 'numeric',
     });
 
-    const contentHtml = content
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/\n/g, '<br/>');
+    // 🆕 A6 : rendu Markdown propre
+    const contentHtml = markdownToHtml(content);
 
     const html = `
       <!DOCTYPE html>
@@ -36,6 +78,8 @@ export async function generatePdf({
               padding: 40px;
               color: #1A1A1A;
               line-height: 1.6;
+              max-width: 800px;
+              margin: 0 auto;
             }
             .header {
               border-bottom: 2px solid #2E6FB7;
@@ -43,7 +87,7 @@ export async function generatePdf({
               margin-bottom: 30px;
             }
             .title {
-              font-size: 24px;
+              font-size: 26px;
               font-weight: 700;
               color: #2E6FB7;
               margin: 0;
@@ -56,7 +100,67 @@ export async function generatePdf({
             .content {
               font-size: 14px;
               color: #1A1A1A;
-              white-space: pre-wrap;
+            }
+            h1 {
+              font-size: 22px;
+              color: #2E6FB7;
+              margin-top: 24px;
+              margin-bottom: 10px;
+              border-bottom: 1px solid #E2E8F0;
+              padding-bottom: 6px;
+            }
+            h2 {
+              font-size: 18px;
+              color: #2E6FB7;
+              margin-top: 20px;
+              margin-bottom: 8px;
+            }
+            h3 {
+              font-size: 16px;
+              color: #1A1A1A;
+              margin-top: 14px;
+              margin-bottom: 6px;
+            }
+            p {
+              margin: 8px 0;
+            }
+            ul {
+              margin: 8px 0;
+              padding-left: 24px;
+            }
+            li {
+              margin: 4px 0;
+            }
+            strong {
+              color: #1A1A1A;
+              font-weight: 700;
+            }
+            em {
+              font-style: italic;
+              color: #5A6472;
+            }
+            code {
+              background: #F0F0F0;
+              padding: 2px 6px;
+              border-radius: 3px;
+              font-family: monospace;
+              font-size: 13px;
+              color: #C7254E;
+            }
+            blockquote {
+              border-left: 4px solid #2E6FB7;
+              padding-left: 14px;
+              padding-top: 4px;
+              padding-bottom: 4px;
+              margin: 12px 0;
+              background: #F7F9FC;
+              font-style: italic;
+              color: #5A6472;
+            }
+            hr {
+              border: none;
+              border-top: 1px solid #E2E8F0;
+              margin: 20px 0;
             }
             .footer {
               margin-top: 40px;
@@ -108,11 +212,8 @@ export async function printPdf({
       year: 'numeric',
     });
 
-    const contentHtml = content
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/\n/g, '<br/>');
+    // 🆕 A6 : rendu Markdown propre
+    const contentHtml = markdownToHtml(content);
 
     const html = `
       <!DOCTYPE html>
@@ -125,6 +226,8 @@ export async function printPdf({
               padding: 40px;
               color: #1A1A1A;
               line-height: 1.6;
+              max-width: 800px;
+              margin: 0 auto;
             }
             .header {
               border-bottom: 2px solid #2E6FB7;
@@ -132,7 +235,7 @@ export async function printPdf({
               margin-bottom: 30px;
             }
             .title {
-              font-size: 24px;
+              font-size: 26px;
               font-weight: 700;
               color: #2E6FB7;
               margin: 0;
@@ -142,32 +245,27 @@ export async function printPdf({
               color: #5A6472;
               margin-top: 8px;
             }
-            .content {
-              font-size: 14px;
-              color: #1A1A1A;
-              white-space: pre-wrap;
-            }
-            .footer {
-              margin-top: 40px;
-              padding-top: 15px;
-              border-top: 1px solid #E2E8F0;
-              font-size: 11px;
-              color: #9CA3AF;
-              text-align: center;
-            }
+            h1 { font-size: 22px; color: #2E6FB7; margin-top: 24px; margin-bottom: 10px; border-bottom: 1px solid #E2E8F0; padding-bottom: 6px; }
+            h2 { font-size: 18px; color: #2E6FB7; margin-top: 20px; margin-bottom: 8px; }
+            h3 { font-size: 16px; color: #1A1A1A; margin-top: 14px; margin-bottom: 6px; }
+            p { margin: 8px 0; }
+            ul { margin: 8px 0; padding-left: 24px; }
+            li { margin: 4px 0; }
+            strong { font-weight: 700; }
+            em { font-style: italic; color: #5A6472; }
+            code { background: #F0F0F0; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 13px; color: #C7254E; }
+            blockquote { border-left: 4px solid #2E6FB7; padding-left: 14px; padding: 4px 14px; margin: 12px 0; background: #F7F9FC; font-style: italic; color: #5A6472; }
+            hr { border: none; border-top: 1px solid #E2E8F0; margin: 20px 0; }
+            .footer { margin-top: 40px; padding-top: 15px; border-top: 1px solid #E2E8F0; font-size: 11px; color: #9CA3AF; text-align: center; }
           </style>
         </head>
         <body>
           <div class="header">
             <h1 class="title">${title}</h1>
-            <div class="meta">
-              ${date}${agentId ? ` · ${agentId}` : ''}
-            </div>
+            <div class="meta">${date}${agentId ? ` · ${agentId}` : ''}</div>
           </div>
           <div class="content">${contentHtml}</div>
-          <div class="footer">
-            Généré par Agents
-          </div>
+          <div class="footer">Généré par Agents</div>
         </body>
       </html>
     `;
