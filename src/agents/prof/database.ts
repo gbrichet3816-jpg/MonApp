@@ -18,14 +18,22 @@ export async function openProfDatabase(): Promise<SQLite.SQLiteDatabase> {
     return profDb;
   }
 
-  profDb = await SQLite.openDatabaseAsync(DB_NAME);
+  try {
+    profDb = await SQLite.openDatabaseAsync(DB_NAME);
 
-  if (!isInitialized) {
-    await initProfTables(profDb);
-    isInitialized = true;
+    if (!isInitialized) {
+      await initProfTables(profDb);
+      isInitialized = true;
+    }
+
+    return profDb;
+  } catch (e) {
+    // 🆕 Reset pour permettre une nouvelle tentative
+    profDb = null;
+    isInitialized = false;
+    console.error('[Prof DB] Erreur ouverture base:', e);
+    throw e;
   }
-
-  return profDb;
 }
 
 async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
@@ -240,7 +248,7 @@ export async function addProfPoints(db: SQLite.SQLiteDatabase, userId: string, d
 }
 
 // ============================================================
-// 🆕 TTS (Supertonic-3)
+// TTS
 // ============================================================
 
 export async function isTtsDownloaded(db: SQLite.SQLiteDatabase, userId: string): Promise<boolean> {
@@ -270,20 +278,56 @@ export async function setWeatherCity(db: SQLite.SQLiteDatabase, userId: string, 
   );
 }
 
+/**
+ * 🆕 Stocke la météo en cache. Robuste : ignore l'erreur si la base est fermée.
+ */
 export async function cacheWeather(db: SQLite.SQLiteDatabase, userId: string, json: string): Promise<void> {
-  const now = Date.now();
-  await db.runAsync(
-    `UPDATE prof_profile SET weather_cache_json = ?, weather_cache_at = ?, updated_at = ? WHERE user_id = ?`,
-    [json, now, now, userId]
-  );
+  try {
+    if (!db) {
+      console.warn('[Prof DB] cacheWeather: pas de base ouverte');
+      return;
+    }
+
+    const now = Date.now();
+
+    // 🆕 On vérifie que le profil existe. S'il n'existe pas, on le crée d'abord.
+    const profile = await db.getFirstAsync<{ user_id: string }>(
+      'SELECT user_id FROM prof_profile WHERE user_id = ?',
+      [userId]
+    );
+
+    if (!profile) {
+      console.warn('[Prof DB] cacheWeather: profil inexistant, création…');
+      await db.runAsync(
+        `INSERT INTO prof_profile (user_id, child_name, child_age, child_grade, child_level, created_at, updated_at)
+         VALUES (?, 'Enfant', 10, 'CM2', 'cm1_6e', ?, ?)`,
+        [userId, now, now]
+      );
+    }
+
+    await db.runAsync(
+      `UPDATE prof_profile SET weather_cache_json = ?, weather_cache_at = ?, updated_at = ? WHERE user_id = ?`,
+      [json, now, now, userId]
+    );
+  } catch (e) {
+    // 🆕 On ne fait plus planter l'appli : on log juste
+    console.warn('[Prof DB] cacheWeather échoué (non bloquant):', e);
+  }
 }
 
 export async function getCachedWeather(db: SQLite.SQLiteDatabase, userId: string): Promise<string | null> {
-  const profile = await getProfProfile(db, userId);
-  if (!profile || !profile.weather_cache_json || !profile.weather_cache_at) return null;
-  const oneHourAgo = Date.now() - 60 * 60 * 1000;
-  if (profile.weather_cache_at < oneHourAgo) return null;
-  return profile.weather_cache_json;
+  try {
+    if (!db) return null;
+
+    const profile = await getProfProfile(db, userId);
+    if (!profile || !profile.weather_cache_json || !profile.weather_cache_at) return null;
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    if (profile.weather_cache_at < oneHourAgo) return null;
+    return profile.weather_cache_json;
+  } catch (e) {
+    console.warn('[Prof DB] getCachedWeather échoué:', e);
+    return null;
+  }
 }
 
 export async function incrementWeatherRefusal(db: SQLite.SQLiteDatabase, userId: string): Promise<number> {
@@ -548,12 +592,9 @@ export async function getProfState(db: SQLite.SQLiteDatabase, userId: string): P
 
   if (!state) {
     const now = Date.now();
-    // 🆕 Fix bug #11 : INSERT OR IGNORE pour éviter UNIQUE constraint en cas de race condition
     await db.runAsync(`INSERT OR IGNORE INTO prof_state (user_id, updated_at) VALUES (?, ?)`, [userId, now]);
-    // On relit après l'insert pour avoir l'état réel (au cas où un autre process l'a créé)
     state = await db.getFirstAsync<ProfState>('SELECT * FROM prof_state WHERE user_id = ?', [userId]);
     if (!state) {
-      // Fallback si vraiment rien (ne devrait pas arriver)
       state = {
         user_id: userId,
         last_review_offer_at: null,

@@ -33,30 +33,47 @@ type Props = {
   quizTitle?: string;
   quizQuestions?: QuizQuestion[];
   onQuizAnswer?: (questionIndex: number, userAnswer: string) => void;
-  // A10 : bouton Relancer
   isError?: boolean;
   onRetry?: () => void;
-  // A1 : bouton Arrêter le quiz
   onStopQuiz?: () => void;
-  // A7 v3 : visuel
   visual?: VisualData;
 };
 
 // Nettoyage AGRESSIF des balises internes DeepSeek (DSML, etc.)
 function cleanDsmlTags(text: string): string {
   if (!text) return '';
+
+  // 🆕 Détection : si le texte contient beaucoup de DSML, c'est que Prof
+  // a mal formulé sa réponse → on nettoie TOUT le DSML et on garde
+  // seulement le texte "propre" s'il existe.
+  const dsmlCount = (text.match(/DSML/gi) || []).length;
+
+  // Si le message est quasi exclusivement du DSML → on renvoie un message neutre
+  if (dsmlCount >= 2) {
+    let cleaned = text
+      // Blocs <||DSML||>...</||DSML||>
+      .replace(/<\|+\s*DSML\s*\|+>[\s\S]*?<\/\|+\s*DSML\s*\|+>/gi, '')
+      // Balises orphelines <||DSML||> et </||DSML||>
+      .replace(/<\/?\|+\s*DSML\s*\|+[^>]*>/gi, '')
+      // Lignes vides multiples
+      .replace(/\n{3,}/g, '\n\n')
+      // Espaces multiples
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+
+    // Si après nettoyage il ne reste plus rien → message neutre
+    if (cleaned.length < 5) {
+      return '[Action en cours…]';
+    }
+    return cleaned;
+  }
+
+  // Cas normal : nettoyage standard
   return text
-    // Balises <||DSML||> et </||DSML||>
     .replace(/<+\|+\|?\s*DSML\s*\|?\|+>+/gi, '')
     .replace(/<\/+\|+\|?\s*DSML\s*\|?\|+>+/gi, '')
-    // Balises type <| DSML | invoke ...>
-    .replace(/<+\s*\|+\s*DSML\s*\|+\s*[^>]*>/gi, '')
-    .replace(/<\/+\s*\|+\s*DSML\s*\|+\s*[^>]*>/gi, '')
-    // Restes : <|...|> générique
     .replace(/<\|[^|>]*\|>/g, '')
-    // Lignes vides multiples
     .replace(/\n{3,}/g, '\n\n')
-    // Espaces multiples
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
 }
@@ -141,7 +158,6 @@ export default function Message({
     }
   }, [isDictation, autoSpeak, isUser, currentSentence]);
 
-  // Bug #27 : ne relire la question QUE si elle n'a pas déjà été lue
   useEffect(() => {
     if (!isQuiz || !quizQuestions || !quizQuestions[currentIndex] || quizFinished) return;
     if (hasReadCurrentQuestionRef.current === currentIndex) return;
@@ -321,7 +337,7 @@ export default function Message({
       onQuizAnswer?.(-1, `FIN:${correctCount}/${totalQuestions}`);
     };
 
-    const handleStopQuiz = () => {
+    const handleStopQuizInternal = () => {
       stopSpeaking();
       if (isListening) {
         try { cancel(); } catch {}
@@ -368,7 +384,7 @@ export default function Message({
             <Text style={styles.quizLabel} numberOfLines={1} ellipsizeMode="tail">
               {quizTitle || 'Quiz'}
             </Text>
-            <TouchableOpacity style={styles.quizStopButton} onPress={handleStopQuiz}>
+            <TouchableOpacity style={styles.quizStopButton} onPress={handleStopQuizInternal}>
               <Ionicons name="close-circle-outline" size={20} color={Colors.light.error} />
             </TouchableOpacity>
           </View>
@@ -582,7 +598,6 @@ export default function Message({
   // ============================================================
   const cleanedText = isUser ? text : cleanDsmlTags(text);
 
-  // A10 : bulle d'erreur avec bouton Relancer
   if (isError) {
     return (
       <View style={[styles.container, styles.agentContainer]}>
@@ -603,7 +618,6 @@ export default function Message({
     );
   }
 
-  // A7 v3 : rendu du visuel si présent
   if (visual) {
     return (
       <View style={[styles.container, styles.agentContainer]}>
@@ -644,7 +658,6 @@ export default function Message({
   );
 }
 
-// A8 : styles Markdown
 const markdownStyles = {
   body: {
     fontSize: 15,
@@ -732,7 +745,6 @@ const styles = StyleSheet.create({
   agentText: { color: Colors.light.text },
   speakButton: { marginTop: Spacing.two, alignSelf: 'flex-start' },
 
-  // A10 : bulle d'erreur
   errorBubble: { backgroundColor: '#FFEBEE', borderWidth: 1, borderColor: Colors.light.error, borderBottomLeftRadius: Spacing.one },
   errorHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, marginBottom: Spacing.two },
   errorTitle: { fontSize: 14, fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.error },
@@ -740,7 +752,6 @@ const styles = StyleSheet.create({
   retryButton: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, backgroundColor: Colors.light.primary, paddingVertical: Spacing.two, paddingHorizontal: Spacing.three, borderRadius: Spacing.two, marginTop: Spacing.three, alignSelf: 'flex-start' },
   retryButtonText: { fontSize: 14, fontWeight: '600', fontFamily: Fonts.semibold, color: Colors.light.background },
 
-  // Dictée
   dictationBubble: { backgroundColor: '#FFF8E1', borderWidth: 2, borderColor: Colors.light.primary, borderStyle: 'dashed', minWidth: 260 },
   dictationHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.two, gap: Spacing.one },
   dictationLabel: { fontSize: 12, fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.primary, textTransform: 'uppercase', letterSpacing: 0.5 },
@@ -761,7 +772,6 @@ const styles = StyleSheet.create({
   dictationRevealedText: { fontSize: 15, fontFamily: Fonts.regular, color: Colors.light.text, lineHeight: 22, marginBottom: Spacing.one },
   dictationRevealedTextActive: { fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.primary },
 
-  // Quiz
   quizBubble: { backgroundColor: '#E8F5E9', borderWidth: 2, borderColor: '#2E7D32', minWidth: 280 },
   quizFinishedBubble: { backgroundColor: '#FFF3E0', borderColor: '#FFB300' },
   quizFinishedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#2E7D32', paddingHorizontal: Spacing.two, paddingVertical: 2, borderRadius: Spacing.one, marginLeft: 'auto' },

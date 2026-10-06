@@ -107,6 +107,10 @@ import { getLocalProfile } from '@/config/user';
 import { Colors } from '@/constants/theme';
 import type { VisualData } from '@/utils/visualParser';
 
+// ============================================================
+// FONCTIONS UTILITAIRES
+// ============================================================
+
 function decodeBase64Utf8(base64: string): string {
   try {
     const binaryString = (global as any).atob
@@ -145,6 +149,10 @@ function hasActiveQuiz(messages: ChatMessage[]): boolean {
   const last = visibleMessages[visibleMessages.length - 1];
   return last?.isQuiz === true;
 }
+
+// ============================================================
+// COMPOSANT PRINCIPAL
+// ============================================================
 
 export default function HomeScreen() {
   const params = useLocalSearchParams();
@@ -462,6 +470,10 @@ export default function HomeScreen() {
     });
   };
 
+  // ============================================================
+  // EXECUTION UNIVERSELLE DES TOOLS
+  // ============================================================
+
   const executeToolCall = async (call: ToolCall, agentId: string): Promise<string> => {
     const args = call.arguments as any;
     console.log('🔧 Exécution du tool:', call.name, args);
@@ -551,6 +563,80 @@ export default function HomeScreen() {
             lines.push(`  - ${e.grade}/${e.grade_max} (${e.title})`);
           }
         }
+        return lines.join('\n');
+      }
+
+      // 🆕 Bilan d'activité
+      if (call.name === 'getActivityReport') {
+        const days = parseInt(args.days) || 30;
+        const sinceDate = new Date();
+        sinceDate.setDate(sinceDate.getDate() - days);
+        const sinceTimestamp = sinceDate.getTime();
+
+        // 1. Récupérer les notions travaillées
+        const allTopics = await getAllTopics(profDb, userId);
+        const recentTopics = allTopics.filter((t) => t.last_seen >= sinceTimestamp);
+
+        // 2. Récupérer les notes
+        const eventsWithGrades = await getEventsWithGrades(profDb, userId);
+
+        // 3. Calculer les stats
+        const totalNotions = recentTopics.length;
+        const acquiredNotions = recentTopics.filter((t) => t.status === 'acquired').length;
+        const fragileNotions = recentTopics.filter((t) => t.status === 'fragile').length;
+        const inProgressNotions = recentTopics.filter((t) => t.status === 'in_progress').length;
+
+        // Moyennes par matière
+        const bySubject: Record<string, { count: number; total: number; totalMax: number }> = {};
+        for (const e of eventsWithGrades) {
+          const s = e.subject || 'Autre';
+          if (!bySubject[s]) bySubject[s] = { count: 0, total: 0, totalMax: 0 };
+          if (e.grade !== null && e.grade_max) {
+            bySubject[s].count++;
+            bySubject[s].total += e.grade;
+            bySubject[s].totalMax += e.grade_max;
+          }
+        }
+
+        // Temps de travail estimé (2 min par notion vue)
+        const estimatedMinutes = recentTopics.reduce((acc, t) => acc + (t.times_seen * 2), 0);
+        const estimatedHours = Math.round((estimatedMinutes / 60) * 10) / 10;
+
+        // Construction du texte
+        const lines: string[] = [`# 📊 Bilan d'activité — ${days} derniers jours`, ''];
+
+        if (totalNotions === 0) {
+          lines.push('Aucune notion travaillée sur cette période.');
+        } else {
+          lines.push('## 🧠 Notions travaillées');
+          lines.push(`- Total : **${totalNotions}**`);
+          lines.push(`- ✅ Acquises : **${acquiredNotions}**`);
+          lines.push(`- 🔄 En cours : **${inProgressNotions}**`);
+          lines.push(`- ⚠️ Fragiles : **${fragileNotions}**`);
+          lines.push('');
+          lines.push('## ⏱️ Temps de travail estimé');
+          lines.push(`- **${estimatedHours} h** (estimation)`);
+          lines.push('');
+
+          if (Object.keys(bySubject).length > 0) {
+            lines.push('## 📝 Moyennes par matière');
+            for (const [subject, stats] of Object.entries(bySubject)) {
+              const moyenne = stats.totalMax > 0 ? (stats.total / stats.totalMax) * 20 : 0;
+              lines.push(`- **${subject}** : ${moyenne.toFixed(1)}/20 (${stats.count} note${stats.count > 1 ? 's' : ''})`);
+            }
+            lines.push('');
+          }
+
+          if (fragileNotions > 0) {
+            const fragiles = recentTopics.filter((t) => t.status === 'fragile').slice(0, 3);
+            lines.push('## ⚠️ Points fragiles à retravailler');
+            for (const t of fragiles) {
+              lines.push(`- ${t.subject} — ${t.topic}`);
+            }
+            lines.push('');
+          }
+        }
+
         return lines.join('\n');
       }
 

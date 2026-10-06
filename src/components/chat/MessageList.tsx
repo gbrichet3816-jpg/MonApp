@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { FlatList, NativeScrollEvent, NativeSyntheticEvent, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef } from 'react';
+import { NativeScrollEvent, NativeSyntheticEvent, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Colors, Fonts, Spacing } from '@/constants/theme';
 
@@ -14,10 +14,8 @@ export type ChatMessage = {
   isQuiz?: boolean;
   quizTitle?: string;
   quizQuestions?: QuizQuestion[];
-  // 🆕 A10 : pour bouton Relancer
   isError?: boolean;
   originalText?: string;
-  // 🆕 A7 v3 : visuel
   visual?: VisualData;
 };
 
@@ -28,18 +26,15 @@ type Props = {
   onRetry?: (originalText: string) => void;
 };
 
-// Distance du bas (en px) en dessous de laquelle on considère
-// que l'utilisateur est "collé en bas"
 const BOTTOM_THRESHOLD = 80;
 
 export default function MessageList({ messages, emptyText, onQuizAnswer, onRetry }: Props) {
-  const listRef = useRef<FlatList<ChatMessage>>(null);
-  // 🆕 Flag : l'utilisateur est-il en train de scroller manuellement ?
+  const scrollRef = useRef<ScrollView>(null);
   const isUserScrolling = useRef(false);
-  // 🆕 Flag : est-on collé en bas de la liste ?
   const isAtBottom = useRef(true);
-  // 🆕 Dernier ID de message affiché (pour ne scroller QUE sur nouveau message)
   const lastMessageIdRef = useRef<string | null>(null);
+  // 🆕 Flag : a-t-on déjà scrollé au moins 1 fois après chargement initial ?
+  const hasInitialScrolled = useRef(false);
 
   const visibleMessages = messages.filter((msg) => {
     if (msg.isQuiz) return true;
@@ -60,40 +55,56 @@ export default function MessageList({ messages, emptyText, onQuizAnswer, onRetry
   const lastMessage = visibleMessages[visibleMessages.length - 1];
   const lastMessageId = lastMessage?.id || null;
   const hasActiveQuiz = lastMessage?.isQuiz === true;
+  const messagesCount = visibleMessages.length;
 
-  // 🆕 Scroll auto UNIQUEMENT si un NOUVEAU message arrive ET qu'on est en bas
+  // 🆕 Reset du flag quand la liste devient vide (changement d'agent)
+  useEffect(() => {
+    if (messagesCount === 0) {
+      hasInitialScrolled.current = false;
+      lastMessageIdRef.current = null;
+    }
+  }, [messagesCount]);
+
+  // 🆕 Scroll initial : dès que le contenu est prêt, on scrolle EN BAS sans animation
+  const handleContentSizeChange = useCallback((_w: number, h: number) => {
+    if (hasInitialScrolled.current) return;
+    if (h <= 0) return;
+
+    // On scrolle en bas immédiatement (pas d'animation)
+    scrollRef.current?.scrollToEnd({ animated: false });
+
+    // Puis une 2e fois après un petit délai (au cas où la hauteur aurait changé)
+    setTimeout(() => {
+      scrollRef.current?.scrollToEnd({ animated: false });
+      hasInitialScrolled.current = true;
+      lastMessageIdRef.current = lastMessageId;
+    }, 50);
+  }, [lastMessageId]);
+
+  // 🆕 Scroll auto sur nouveau message (si on est en bas et pas en train de scroller)
   useEffect(() => {
     if (hasActiveQuiz) return;
+    if (!lastMessageId) return;
+    if (!hasInitialScrolled.current) return;
 
-    // On scrolle seulement si le dernier message a changé
-    if (!lastMessageId || lastMessageId === lastMessageIdRef.current) return;
+    if (lastMessageId === lastMessageIdRef.current) return;
 
-    // On scrolle seulement si l'utilisateur est déjà en bas (pas en train de lire)
-    if (!isAtBottom.current) {
-      lastMessageIdRef.current = lastMessageId;
-      return;
-    }
-
-    // On scrolle seulement si l'utilisateur ne scrolle pas manuellement
-    if (isUserScrolling.current) {
+    if (!isAtBottom.current || isUserScrolling.current) {
       lastMessageIdRef.current = lastMessageId;
       return;
     }
 
     lastMessageIdRef.current = lastMessageId;
 
-    // Délai pour laisser le rendu se faire
     setTimeout(() => {
-      listRef.current?.scrollToEnd({ animated: true });
+      scrollRef.current?.scrollToEnd({ animated: true });
     }, 100);
   }, [lastMessageId, hasActiveQuiz]);
 
-  // 🆕 Détecte si l'utilisateur touche l'écran (scroll manuel)
   const handleScrollBeginDrag = () => {
     isUserScrolling.current = true;
   };
 
-  // 🆕 Détecte la fin du scroll manuel et met à jour isAtBottom
   const handleScrollEndDrag = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
@@ -101,7 +112,6 @@ export default function MessageList({ messages, emptyText, onQuizAnswer, onRetry
     isUserScrolling.current = false;
   };
 
-  // 🆕 Détecte le scroll en cours (mise à jour continue de isAtBottom)
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
@@ -117,12 +127,20 @@ export default function MessageList({ messages, emptyText, onQuizAnswer, onRetry
   }
 
   return (
-    <FlatList
-      ref={listRef}
-      data={visibleMessages}
-      keyExtractor={(item) => item.id}
-      renderItem={({ item }) => (
+    <ScrollView
+      ref={scrollRef}
+      style={styles.scroll}
+      contentContainerStyle={styles.listContent}
+      onContentSizeChange={handleContentSizeChange}
+      onScroll={handleScroll}
+      onScrollBeginDrag={handleScrollBeginDrag}
+      onScrollEndDrag={handleScrollEndDrag}
+      scrollEventThrottle={16}
+      keyboardShouldPersistTaps="handled"
+    >
+      {visibleMessages.map((item) => (
         <Message
+          key={item.id}
           text={item.text}
           isUser={item.isUser}
           isDictation={item.isDictation}
@@ -137,24 +155,15 @@ export default function MessageList({ messages, emptyText, onQuizAnswer, onRetry
           onRetry={item.isError && item.originalText ? () => onRetry?.(item.originalText!) : undefined}
           visual={item.visual}
         />
-      )}
-      contentContainerStyle={styles.listContent}
-      // 🆕 Handlers de scroll
-      onScroll={handleScroll}
-      onScrollBeginDrag={handleScrollBeginDrag}
-      onScrollEndDrag={handleScrollEndDrag}
-      scrollEventThrottle={16}
-      // 🆕 On garde onContentSizeChange MAIS on ne scrolle plus automatiquement dedans
-      // On l'utilise uniquement pour détecter les changements de taille
-      onContentSizeChange={() => {
-        // Rien à faire ici : le scroll auto est géré par le useEffect ci-dessus
-        // Ce handler est conservé pour éviter les warnings et permet de futurs ajustements
-      }}
-    />
+      ))}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    flex: 1,
+  },
   listContent: {
     paddingVertical: Spacing.three,
   },
