@@ -107,10 +107,6 @@ import { getLocalProfile } from '@/config/user';
 import { Colors } from '@/constants/theme';
 import type { VisualData } from '@/utils/visualParser';
 
-// ============================================================
-// FONCTIONS UTILITAIRES
-// ============================================================
-
 function decodeBase64Utf8(base64: string): string {
   try {
     const binaryString = (global as any).atob
@@ -150,12 +146,7 @@ function hasActiveQuiz(messages: ChatMessage[]): boolean {
   return last?.isQuiz === true;
 }
 
-// ============================================================
-// COMPOSANT PRINCIPAL
-// ============================================================
-
 export default function HomeScreen() {
-  // 🆕 Deep link : paramètre "notion" depuis app/prof.tsx
   const params = useLocalSearchParams();
 
   const [agentMenuVisible, setAgentMenuVisible] = useState(false);
@@ -191,15 +182,12 @@ export default function HomeScreen() {
     return () => subscription.remove();
   }, []);
 
-  // 🆕 Deep link : intercepter les URLs entrantes (cas appli déjà ouverte)
   useEffect(() => {
     const handleUrl = (url: string | null) => {
       if (!url) return;
       try {
         const parsed = Linking.parse(url);
         console.log('🔗 Deep link reçu:', parsed);
-
-        // Ignorer les deep links de Metro/dev-client
         if (parsed.scheme?.startsWith('exp+')) return;
 
         if (parsed.path === 'prof' && parsed.queryParams?.notion) {
@@ -217,7 +205,6 @@ export default function HomeScreen() {
     return () => sub.remove();
   }, []);
 
-  // 🆕 Deep link : paramètre "notion" depuis app/prof.tsx (redirection)
   useEffect(() => {
     if (params.notion && typeof params.notion === 'string') {
       console.log('🔗 Notion depuis deep link (redirect):', params.notion);
@@ -250,10 +237,6 @@ export default function HomeScreen() {
       setMessages([]);
     }
   }, [selectedAgentId]);
-
-  // ============================================================
-  // VÉRIFICATIONS AUTOMATIQUES
-  // ============================================================
 
   const checkWeatherCityPrompt = async () => {
     try {
@@ -478,10 +461,6 @@ export default function HomeScreen() {
       return [...prev, ...newQuestions];
     });
   };
-
-  // ============================================================
-  // EXECUTION UNIVERSELLE DES TOOLS
-  // ============================================================
 
   const executeToolCall = async (call: ToolCall, agentId: string): Promise<string> => {
     const args = call.arguments as any;
@@ -769,6 +748,15 @@ export default function HomeScreen() {
         }
       }
 
+      if (call.name === 'deleteReminder') {
+        const name = args.name || args.medicationName || '';
+        if (!name) {
+          return 'Nom du rappel manquant.';
+        }
+        deactivateRemindersByName(agentId, name);
+        return `Rappel supprimé : "${name}"`;
+      }
+
       if (call.name === 'listReminders') {
         const reminders = loadReminders(agentId);
         if (reminders.length === 0) return 'Aucun rappel actif.';
@@ -782,10 +770,6 @@ export default function HomeScreen() {
       return 'Erreur lors de l\'exécution du tool.';
     }
   };
-
-  // ============================================================
-  // ENVOI D'UN MESSAGE TEXTE
-  // ============================================================
 
   const selectedAgent = AGENTS.find((a) => a.id === selectedAgentId);
   const headerTitle = selectedAgent ? selectedAgent.name : 'Aucun agent';
@@ -1116,10 +1100,6 @@ export default function HomeScreen() {
     }
   };
 
-  // ============================================================
-  // GESTION DES FICHIERS
-  // ============================================================
-
   const handleFilePicked = (file: ImportedFile) => {
     setPendingFile(file);
     setFileModalVisible(true);
@@ -1352,10 +1332,6 @@ export default function HomeScreen() {
     setPendingFile(null);
   };
 
-  // ============================================================
-  // GESTION DES PHOTOS
-  // ============================================================
-
   const handlePhotoTaken = (photoUri: string, base64?: string) => {
     setPendingPhoto({ uri: photoUri, base64 });
     setPhotoModalVisible(true);
@@ -1562,10 +1538,6 @@ export default function HomeScreen() {
     setPendingPhoto(null);
   };
 
-  // ============================================================
-  // TRAITEMENT DES RÉPONSES AU QUIZ
-  // ============================================================
-
   const handleQuizAnswer = async (
     messageId: string,
     questionIndex: number,
@@ -1622,10 +1594,6 @@ export default function HomeScreen() {
       }
     }
   };
-
-  // ============================================================
-  // RENDU
-  // ============================================================
 
   const emptyText = selectedAgent
     ? `Conversation avec ${selectedAgent.name}. Écris ton premier message !`
@@ -1684,10 +1652,6 @@ export default function HomeScreen() {
   );
 }
 
-// ============================================================
-// PROMPTS SPÉCIAUX
-// ============================================================
-
 const EVENING_BRIEFING_PROMPT = `Tu es "Prof". Tu prépares ton rappel du soir pour l'enfant.
 Tu viens de recevoir des données sur la journée de demain et éventuellement
 des contrôles passés en attente de note.
@@ -1701,10 +1665,6 @@ Exemples :
 const PROF_REVIEW_PROMPT = `Tu es "Prof". Tu viens de recevoir des notions à revoir.
 Propose spontanément une révision à l'enfant avec un message COURT (2-3 lignes max).
 Ton chaleureux, léger, avec une porte de sortie ("tu veux ?").`;
-
-// ============================================================
-// STYLES
-// ============================================================
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: Colors.light.background },
