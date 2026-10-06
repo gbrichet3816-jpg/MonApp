@@ -2,79 +2,91 @@ import * as SQLite from 'expo-sqlite';
 
 import { initUserTable } from './user';
 
-const db = SQLite.openDatabaseSync('monapp.db');
+// 🆕 On n'ouvre PAS la base au chargement du module
+// On l'ouvre dans initDatabase() pour éviter les erreurs au 1er lancement
+let db: SQLite.SQLiteDatabase | null = null;
 
-export function initDatabase() {
-  // 🆕 Bug #3 : désactiver WAL pour éviter les pertes de messages en kill brutal
-  try {
-    db.execSync('PRAGMA journal_mode = DELETE;');
-    db.execSync('PRAGMA synchronous = FULL;');
-  } catch (e) {
-    console.warn('[DB] Erreur PRAGMA:', e);
+function getDb(): SQLite.SQLiteDatabase {
+  if (!db) {
+    db = SQLite.openDatabaseSync('monapp.db');
   }
-
-  db.execSync(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL,
-      text TEXT NOT NULL,
-      is_user INTEGER NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_messages_agent
-      ON messages (agent_id, created_at);
-
-    CREATE TABLE IF NOT EXISTS reminders (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL,
-      medication_name TEXT NOT NULL,
-      time TEXT NOT NULL,
-      notification_id TEXT,
-      active INTEGER NOT NULL DEFAULT 1,
-      created_at INTEGER NOT NULL,
-      last_fired_at INTEGER,
-      response TEXT,
-      reminder_type TEXT DEFAULT 'daily',
-      scheduled_at INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS preferences (
-      key TEXT PRIMARY KEY NOT NULL,
-      value TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS documents (
-      id TEXT PRIMARY KEY NOT NULL,
-      agent_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      content TEXT NOT NULL,
-      file_path TEXT,
-      file_type TEXT,
-      created_at INTEGER NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_documents_agent
-      ON documents (agent_id, created_at);
-  `);
-
-  // Migrations
-  try { db.execSync('ALTER TABLE documents ADD COLUMN file_path TEXT'); } catch (e) {}
-  try { db.execSync('ALTER TABLE documents ADD COLUMN file_type TEXT'); } catch (e) {}
-  try { db.execSync('ALTER TABLE reminders ADD COLUMN reminder_type TEXT DEFAULT \'daily\''); } catch (e) {}
-  try { db.execSync('ALTER TABLE reminders ADD COLUMN scheduled_at INTEGER'); } catch (e) {}
-
-  initUserTable();
+  return db;
 }
 
-// 🆕 Bug #3 : checkpoint manuel (à appeler quand l'app passe en arrière-plan)
-export function checkpointDatabase() {
+export function initDatabase() {
   try {
-    db.execSync('PRAGMA wal_checkpoint(FULL);');
+    // 🆕 Ouvre la base ici (pas au chargement)
+    const database = getDb();
+
+    // Désactiver WAL pour éviter les pertes de messages en kill brutal
+    try {
+      database.execSync('PRAGMA journal_mode = DELETE;');
+      database.execSync('PRAGMA synchronous = FULL;');
+    } catch (e) {
+      console.warn('[DB] Erreur PRAGMA:', e);
+    }
+
+    database.execSync(`
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY NOT NULL,
+        agent_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        is_user INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_messages_agent
+        ON messages (agent_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS reminders (
+        id TEXT PRIMARY KEY NOT NULL,
+        agent_id TEXT NOT NULL,
+        medication_name TEXT NOT NULL,
+        time TEXT NOT NULL,
+        notification_id TEXT,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        last_fired_at INTEGER,
+        response TEXT,
+        reminder_type TEXT DEFAULT 'daily',
+        scheduled_at INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS preferences (
+        key TEXT PRIMARY KEY NOT NULL,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS documents (
+        id TEXT PRIMARY KEY NOT NULL,
+        agent_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        file_path TEXT,
+        file_type TEXT,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_documents_agent
+        ON documents (agent_id, created_at);
+    `);
+
+    // Migrations
+    try { database.execSync('ALTER TABLE documents ADD COLUMN file_path TEXT'); } catch (e) {}
+    try { database.execSync('ALTER TABLE documents ADD COLUMN file_type TEXT'); } catch (e) {}
+    try { database.execSync('ALTER TABLE reminders ADD COLUMN reminder_type TEXT DEFAULT \'daily\''); } catch (e) {}
+    try { database.execSync('ALTER TABLE reminders ADD COLUMN scheduled_at INTEGER'); } catch (e) {}
+
+    initUserTable();
   } catch (e) {
-    console.warn('[DB] Checkpoint échoué:', e);
+    console.error('[DB] Erreur initDatabase:', e);
+    throw e;
   }
+}
+
+export function checkpointDatabase() {
+  // No-op : plus de PRAGMA wal_checkpoint
 }
 
 // ===== MESSAGES =====
@@ -90,21 +102,22 @@ export function saveMessage({
   text: string;
   isUser: boolean;
 }) {
-  db.runSync(
+  const database = getDb();
+  database.runSync(
     'INSERT OR REPLACE INTO messages (id, agent_id, text, is_user, created_at) VALUES (?, ?, ?, ?, ?)',
     [id, agentId, text, isUser ? 1 : 0, Date.now()],
   );
 }
 
 export function loadMessages(agentId: string) {
-  const rows = db.getAllSync<{
+  const database = getDb();
+  const rows = database.getAllSync<{
     id: string;
     agent_id: string;
     text: string;
     is_user: number;
     created_at: number;
   }>(
-    // 🆕 Bug #3 : LIMIT passé de 50 à 100 pour garder plus de contexte
     'SELECT * FROM messages WHERE agent_id = ? ORDER BY created_at ASC LIMIT 100',
     [agentId],
   );
@@ -118,11 +131,13 @@ export function loadMessages(agentId: string) {
 }
 
 export function clearMessages(agentId: string) {
-  db.runSync('DELETE FROM messages WHERE agent_id = ?', [agentId]);
+  const database = getDb();
+  database.runSync('DELETE FROM messages WHERE agent_id = ?', [agentId]);
 }
 
 export function clearAllMessages() {
-  db.runSync('DELETE FROM messages');
+  const database = getDb();
+  database.runSync('DELETE FROM messages');
 }
 
 // ===== RAPPELS =====
@@ -144,14 +159,16 @@ export function saveReminder({
   reminderType?: string;
   scheduledAt?: number;
 }) {
-  db.runSync(
+  const database = getDb();
+  database.runSync(
     'INSERT OR REPLACE INTO reminders (id, agent_id, medication_name, time, notification_id, active, created_at, reminder_type, scheduled_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)',
     [id, agentId, medicationName, time, notificationId, Date.now(), reminderType, scheduledAt || null],
   );
 }
 
 export function loadReminders(agentId: string) {
-  return db.getAllSync<{
+  const database = getDb();
+  return database.getAllSync<{
     id: string;
     agent_id: string;
     medication_name: string;
@@ -167,37 +184,44 @@ export function loadReminders(agentId: string) {
 }
 
 export function deactivateReminder(id: string) {
-  db.runSync('UPDATE reminders SET active = 0 WHERE id = ?', [id]);
+  const database = getDb();
+  database.runSync('UPDATE reminders SET active = 0 WHERE id = ?', [id]);
 }
 
 export function deactivateRemindersByName(agentId: string, medicationName: string) {
-  db.runSync(
+  const database = getDb();
+  database.runSync(
     'UPDATE reminders SET active = 0 WHERE agent_id = ? AND LOWER(medication_name) = LOWER(?)',
     [agentId, medicationName],
   );
 }
 
 export function deactivateAllReminders(agentId: string) {
-  db.runSync('UPDATE reminders SET active = 0 WHERE agent_id = ?', [agentId]);
+  const database = getDb();
+  database.runSync('UPDATE reminders SET active = 0 WHERE agent_id = ?', [agentId]);
 }
 
 export function clearReminders(agentId: string) {
-  db.runSync('DELETE FROM reminders WHERE agent_id = ?', [agentId]);
+  const database = getDb();
+  database.runSync('DELETE FROM reminders WHERE agent_id = ?', [agentId]);
 }
 
 export function markReminderFired(id: string) {
-  db.runSync('UPDATE reminders SET last_fired_at = ? WHERE id = ?', [Date.now(), id]);
+  const database = getDb();
+  database.runSync('UPDATE reminders SET last_fired_at = ? WHERE id = ?', [Date.now(), id]);
 }
 
 export function setReminderResponse(id: string, response: string) {
-  db.runSync('UPDATE reminders SET response = ? WHERE id = ?', [response, id]);
+  const database = getDb();
+  database.runSync('UPDATE reminders SET response = ? WHERE id = ?', [response, id]);
 }
 
 export function findRemindersToAsk(agentId: string) {
+  const database = getDb();
   const now = new Date();
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
-  const rows = db.getAllSync<{
+  const rows = database.getAllSync<{
     id: string;
     agent_id: string;
     medication_name: string;
@@ -224,23 +248,26 @@ export function findRemindersToAsk(agentId: string) {
 
 export function markRemindersAsAsked(ids: string[]) {
   if (ids.length === 0) return;
+  const database = getDb();
   const now = Date.now();
   ids.forEach((id) => {
-    db.runSync('UPDATE reminders SET last_fired_at = ? WHERE id = ?', [now, id]);
+    database.runSync('UPDATE reminders SET last_fired_at = ? WHERE id = ?', [now, id]);
   });
 }
 
 // ===== PRÉFÉRENCES =====
 
 export function savePreference(key: string, value: string) {
-  db.runSync(
+  const database = getDb();
+  database.runSync(
     'INSERT OR REPLACE INTO preferences (key, value, updated_at) VALUES (?, ?, ?)',
     [key, value, Date.now()],
   );
 }
 
 export function loadPreference(key: string): string | null {
-  const rows = db.getAllSync<{ value: string }>(
+  const database = getDb();
+  const rows = database.getAllSync<{ value: string }>(
     'SELECT value FROM preferences WHERE key = ?',
     [key],
   );
@@ -248,7 +275,8 @@ export function loadPreference(key: string): string | null {
 }
 
 export function loadAllPreferences(): Record<string, string> {
-  const rows = db.getAllSync<{ key: string; value: string }>(
+  const database = getDb();
+  const rows = database.getAllSync<{ key: string; value: string }>(
     'SELECT key, value FROM preferences',
   );
   const result: Record<string, string> = {};
@@ -283,14 +311,16 @@ export function saveDocument({
   filePath?: string;
   fileType?: string;
 }) {
-  db.runSync(
+  const database = getDb();
+  database.runSync(
     'INSERT OR REPLACE INTO documents (id, agent_id, title, content, file_path, file_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     [id, agentId, title, content, filePath || null, fileType || null, Date.now()],
   );
 }
 
 export function loadDocuments(): Document[] {
-  const rows = db.getAllSync<{
+  const database = getDb();
+  const rows = database.getAllSync<{
     id: string;
     agent_id: string;
     title: string;
@@ -312,13 +342,14 @@ export function loadDocuments(): Document[] {
 }
 
 export function deleteDocument(id: string): string | null {
-  const rows = db.getAllSync<{ file_path: string | null }>(
+  const database = getDb();
+  const rows = database.getAllSync<{ file_path: string | null }>(
     'SELECT file_path FROM documents WHERE id = ?',
     [id],
   );
   const filePath = rows[0]?.file_path || null;
 
-  db.runSync('DELETE FROM documents WHERE id = ?', [id]);
+  database.runSync('DELETE FROM documents WHERE id = ?', [id]);
 
   return filePath;
 }

@@ -1,34 +1,35 @@
 // src/agents/prof/database.ts
 // Gestion de la base SQLite locale pour l'Agent Prof
+// ⚠️ VERSION SYNCHRONE (bug NativeDatabase.prepareAsync sur Expo SDK 57)
 
 import * as SQLite from 'expo-sqlite';
 
-const DB_NAME = 'agents.db';
+// 🆕 Utilise la même base que src/config/database.ts
+const DB_NAME = 'monapp.db';
 
-// Cache de la connexion (singleton) pour éviter les NullPointerException
 let profDb: SQLite.SQLiteDatabase | null = null;
 let isInitialized = false;
 
 /**
  * Ouvre (ou récupère) la base de données.
- * Utilise un singleton pour éviter d'ouvrir plusieurs connexions en parallèle.
+ * Utilise openDatabaseSync (synchrone) pour éviter le bug
+ * NativeDatabase.prepareAsync sur Expo SDK 57.
  */
-export async function openProfDatabase(): Promise<SQLite.SQLiteDatabase> {
+export function openProfDatabaseSync(): SQLite.SQLiteDatabase {
   if (profDb && isInitialized) {
     return profDb;
   }
 
   try {
-    profDb = await SQLite.openDatabaseAsync(DB_NAME);
+    profDb = SQLite.openDatabaseSync(DB_NAME);
 
     if (!isInitialized) {
-      await initProfTables(profDb);
+      initProfTables(profDb);
       isInitialized = true;
     }
 
     return profDb;
   } catch (e) {
-    // 🆕 Reset pour permettre une nouvelle tentative
     profDb = null;
     isInitialized = false;
     console.error('[Prof DB] Erreur ouverture base:', e);
@@ -36,9 +37,14 @@ export async function openProfDatabase(): Promise<SQLite.SQLiteDatabase> {
   }
 }
 
-async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
+// 🆕 Garde la version async pour compatibilité (appelle la version sync)
+export async function openProfDatabase(): Promise<SQLite.SQLiteDatabase> {
+  return openProfDatabaseSync();
+}
+
+function initProfTables(db: SQLite.SQLiteDatabase): void {
   // 1. Profil de l'enfant
-  await db.execAsync(`
+  db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_profile (
       user_id TEXT PRIMARY KEY,
       child_name TEXT,
@@ -59,7 +65,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
   `);
 
   // 2. Historique des messages
-  await db.execAsync(`
+  db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id TEXT NOT NULL,
@@ -72,7 +78,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
   `);
 
   // 3. Emploi du temps
-  await db.execAsync(`
+  db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_schedule (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id TEXT NOT NULL,
@@ -89,7 +95,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
   `);
 
   // 4. Événements (avec notes)
-  await db.execAsync(`
+  db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id TEXT NOT NULL,
@@ -109,7 +115,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
   `);
 
   // 5. Notions travaillées
-  await db.execAsync(`
+  db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_topics (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id TEXT NOT NULL,
@@ -129,7 +135,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
   `);
 
   // 6. État général
-  await db.execAsync(`
+  db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_state (
       user_id TEXT PRIMARY KEY,
       last_review_offer_at INTEGER,
@@ -174,7 +180,7 @@ async function initProfTables(db: SQLite.SQLiteDatabase): Promise<void> {
 
   for (const sql of migrations) {
     try {
-      await db.execAsync(sql);
+      db.execSync(sql);
     } catch (e) {
       // Colonne existe déjà
     }
@@ -204,13 +210,13 @@ export interface ProfProfile {
 }
 
 export async function getProfProfile(db: SQLite.SQLiteDatabase, userId: string): Promise<ProfProfile | null> {
-  const row = await db.getFirstAsync<ProfProfile>('SELECT * FROM prof_profile WHERE user_id = ?', [userId]);
+  const row = db.getFirstSync<ProfProfile>('SELECT * FROM prof_profile WHERE user_id = ?', [userId]);
   return row ?? null;
 }
 
 export async function createProfProfile(db: SQLite.SQLiteDatabase, userId: string, childName: string, childAge: number, childGrade: string, childLevel: string): Promise<void> {
   const now = Date.now();
-  await db.runAsync(
+  db.runSync(
     `INSERT OR REPLACE INTO prof_profile
      (user_id, child_name, child_age, child_grade, child_level, points, onboarded,
       weather_city, weather_cache_json, weather_cache_at, weather_city_refusals, weather_enabled,
@@ -240,11 +246,11 @@ export async function updateProfProfile(db: SQLite.SQLiteDatabase, userId: strin
   fields.push('updated_at = ?');
   values.push(Date.now());
   values.push(userId);
-  await db.runAsync(`UPDATE prof_profile SET ${fields.join(', ')} WHERE user_id = ?`, values);
+  db.runSync(`UPDATE prof_profile SET ${fields.join(', ')} WHERE user_id = ?`, values);
 }
 
 export async function addProfPoints(db: SQLite.SQLiteDatabase, userId: string, delta: number): Promise<void> {
-  await db.runAsync(`UPDATE prof_profile SET points = points + ?, updated_at = ? WHERE user_id = ?`, [delta, Date.now(), userId]);
+  db.runSync(`UPDATE prof_profile SET points = points + ?, updated_at = ? WHERE user_id = ?`, [delta, Date.now(), userId]);
 }
 
 // ============================================================
@@ -257,7 +263,7 @@ export async function isTtsDownloaded(db: SQLite.SQLiteDatabase, userId: string)
 }
 
 export async function setTtsDownloaded(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
-  await db.runAsync(
+  db.runSync(
     `UPDATE prof_profile SET tts_downloaded = 1, updated_at = ? WHERE user_id = ?`,
     [Date.now(), userId]
   );
@@ -269,7 +275,7 @@ export async function setTtsDownloaded(db: SQLite.SQLiteDatabase, userId: string
 
 export async function setWeatherCity(db: SQLite.SQLiteDatabase, userId: string, city: string): Promise<void> {
   const now = Date.now();
-  await db.runAsync(
+  db.runSync(
     `UPDATE prof_profile
      SET weather_city = ?, weather_cache_json = NULL, weather_cache_at = NULL,
          weather_city_refusals = 0, weather_enabled = 1, updated_at = ?
@@ -278,39 +284,29 @@ export async function setWeatherCity(db: SQLite.SQLiteDatabase, userId: string, 
   );
 }
 
-/**
- * 🆕 Stocke la météo en cache. Robuste : ignore l'erreur si la base est fermée.
- */
 export async function cacheWeather(db: SQLite.SQLiteDatabase, userId: string, json: string): Promise<void> {
   try {
-    if (!db) {
-      console.warn('[Prof DB] cacheWeather: pas de base ouverte');
-      return;
-    }
-
+    if (!db) return;
     const now = Date.now();
 
-    // 🆕 On vérifie que le profil existe. S'il n'existe pas, on le crée d'abord.
-    const profile = await db.getFirstAsync<{ user_id: string }>(
+    const profile = db.getFirstSync<{ user_id: string }>(
       'SELECT user_id FROM prof_profile WHERE user_id = ?',
       [userId]
     );
 
     if (!profile) {
-      console.warn('[Prof DB] cacheWeather: profil inexistant, création…');
-      await db.runAsync(
+      db.runSync(
         `INSERT INTO prof_profile (user_id, child_name, child_age, child_grade, child_level, created_at, updated_at)
          VALUES (?, 'Enfant', 10, 'CM2', 'cm1_6e', ?, ?)`,
         [userId, now, now]
       );
     }
 
-    await db.runAsync(
+    db.runSync(
       `UPDATE prof_profile SET weather_cache_json = ?, weather_cache_at = ?, updated_at = ? WHERE user_id = ?`,
       [json, now, now, userId]
     );
   } catch (e) {
-    // 🆕 On ne fait plus planter l'appli : on log juste
     console.warn('[Prof DB] cacheWeather échoué (non bloquant):', e);
   }
 }
@@ -334,7 +330,7 @@ export async function incrementWeatherRefusal(db: SQLite.SQLiteDatabase, userId:
   const profile = await getProfProfile(db, userId);
   if (!profile) return 0;
   const newCount = (profile.weather_city_refusals || 0) + 1;
-  await db.runAsync(
+  db.runSync(
     `UPDATE prof_profile SET weather_city_refusals = ?, updated_at = ? WHERE user_id = ?`,
     [newCount, Date.now(), userId]
   );
@@ -342,7 +338,7 @@ export async function incrementWeatherRefusal(db: SQLite.SQLiteDatabase, userId:
 }
 
 export async function disableWeather(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
-  await db.runAsync(`UPDATE prof_profile SET weather_enabled = 0, updated_at = ? WHERE user_id = ?`, [Date.now(), userId]);
+  db.runSync(`UPDATE prof_profile SET weather_enabled = 0, updated_at = ? WHERE user_id = ?`, [Date.now(), userId]);
 }
 
 // ============================================================
@@ -358,15 +354,15 @@ export interface ProfMessage {
 }
 
 export async function saveProfMessage(db: SQLite.SQLiteDatabase, userId: string, role: ProfMessage['role'], content: string): Promise<void> {
-  await db.runAsync(`INSERT INTO prof_messages (user_id, role, content, created_at) VALUES (?, ?, ?, ?)`, [userId, role, content, Date.now()]);
+  db.runSync(`INSERT INTO prof_messages (user_id, role, content, created_at) VALUES (?, ?, ?, ?)`, [userId, role, content, Date.now()]);
 }
 
 export async function getProfMessages(db: SQLite.SQLiteDatabase, userId: string, limit: number = 50): Promise<ProfMessage[]> {
-  return await db.getAllAsync<ProfMessage>(`SELECT * FROM prof_messages WHERE user_id = ? ORDER BY created_at ASC LIMIT ?`, [userId, limit]);
+  return db.getAllSync<ProfMessage>(`SELECT * FROM prof_messages WHERE user_id = ? ORDER BY created_at ASC LIMIT ?`, [userId, limit]);
 }
 
 export async function clearProfMessages(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
-  await db.runAsync('DELETE FROM prof_messages WHERE user_id = ?', [userId]);
+  db.runSync('DELETE FROM prof_messages WHERE user_id = ?', [userId]);
 }
 
 // ============================================================
@@ -386,7 +382,7 @@ export interface ProfScheduleItem {
 }
 
 export async function addScheduleItem(db: SQLite.SQLiteDatabase, item: Omit<ProfScheduleItem, 'id' | 'created_at'>): Promise<void> {
-  await db.runAsync(
+  db.runSync(
     `INSERT INTO prof_schedule (user_id, day_of_week, start_time, end_time, subject, room, teacher, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [item.user_id, item.day_of_week, item.start_time, item.end_time, item.subject, item.room ?? null, item.teacher ?? null, Date.now()]
   );
@@ -394,13 +390,13 @@ export async function addScheduleItem(db: SQLite.SQLiteDatabase, item: Omit<Prof
 
 export async function getSchedule(db: SQLite.SQLiteDatabase, userId: string, dayOfWeek?: number): Promise<ProfScheduleItem[]> {
   if (dayOfWeek !== undefined) {
-    return await db.getAllAsync<ProfScheduleItem>(`SELECT * FROM prof_schedule WHERE user_id = ? AND day_of_week = ? ORDER BY start_time ASC`, [userId, dayOfWeek]);
+    return db.getAllSync<ProfScheduleItem>(`SELECT * FROM prof_schedule WHERE user_id = ? AND day_of_week = ? ORDER BY start_time ASC`, [userId, dayOfWeek]);
   }
-  return await db.getAllAsync<ProfScheduleItem>(`SELECT * FROM prof_schedule WHERE user_id = ? ORDER BY day_of_week ASC, start_time ASC`, [userId]);
+  return db.getAllSync<ProfScheduleItem>(`SELECT * FROM prof_schedule WHERE user_id = ? ORDER BY day_of_week ASC, start_time ASC`, [userId]);
 }
 
 export async function clearSchedule(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
-  await db.runAsync('DELETE FROM prof_schedule WHERE user_id = ?', [userId]);
+  db.runSync('DELETE FROM prof_schedule WHERE user_id = ?', [userId]);
 }
 
 // ============================================================
@@ -423,7 +419,7 @@ export interface ProfEvent {
 }
 
 export async function addProfEvent(db: SQLite.SQLiteDatabase, event: Omit<ProfEvent, 'id' | 'created_at' | 'done' | 'grade' | 'grade_max' | 'grade_at' | 'grade_asked'> & { done?: number }): Promise<void> {
-  await db.runAsync(
+  db.runSync(
     `INSERT INTO prof_events (user_id, type, subject, title, due_date, done, grade, grade_max, grade_at, grade_asked, created_at)
      VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, ?)`,
     [event.user_id, event.type, event.subject ?? null, event.title, event.due_date, event.done ?? 0, Date.now()]
@@ -431,7 +427,7 @@ export async function addProfEvent(db: SQLite.SQLiteDatabase, event: Omit<ProfEv
 }
 
 export async function getUpcomingEvents(db: SQLite.SQLiteDatabase, userId: string, limit: number = 20): Promise<ProfEvent[]> {
-  return await db.getAllAsync<ProfEvent>(`SELECT * FROM prof_events WHERE user_id = ? AND done = 0 AND due_date >= ? ORDER BY due_date ASC LIMIT ?`, [userId, Date.now(), limit]);
+  return db.getAllSync<ProfEvent>(`SELECT * FROM prof_events WHERE user_id = ? AND done = 0 AND due_date >= ? ORDER BY due_date ASC LIMIT ?`, [userId, Date.now(), limit]);
 }
 
 export async function getEventsForDate(db: SQLite.SQLiteDatabase, userId: string, date: Date): Promise<ProfEvent[]> {
@@ -439,7 +435,7 @@ export async function getEventsForDate(db: SQLite.SQLiteDatabase, userId: string
   startOfDay.setHours(0, 0, 0, 0);
   const endOfDay = new Date(date);
   endOfDay.setHours(23, 59, 59, 999);
-  return await db.getAllAsync<ProfEvent>(
+  return db.getAllSync<ProfEvent>(
     `SELECT * FROM prof_events WHERE user_id = ? AND done = 0 AND due_date BETWEEN ? AND ? ORDER BY due_date ASC`,
     [userId, startOfDay.getTime(), endOfDay.getTime()]
   );
@@ -450,7 +446,7 @@ export async function getEventsAwaitingGrade(db: SQLite.SQLiteDatabase, userId: 
   const twoDaysAgo = now - 2 * 24 * 60 * 60 * 1000;
   const fourDaysAgo = now - 4 * 24 * 60 * 60 * 1000;
 
-  return await db.getAllAsync<ProfEvent>(
+  return db.getAllSync<ProfEvent>(
     `SELECT * FROM prof_events
      WHERE user_id = ?
        AND type = 'controle'
@@ -465,18 +461,18 @@ export async function getEventsAwaitingGrade(db: SQLite.SQLiteDatabase, userId: 
 }
 
 export async function markGradeAsked(db: SQLite.SQLiteDatabase, eventId: number): Promise<void> {
-  await db.runAsync('UPDATE prof_events SET grade_asked = 1 WHERE id = ?', [eventId]);
+  db.runSync('UPDATE prof_events SET grade_asked = 1 WHERE id = ?', [eventId]);
 }
 
 export async function saveEventGrade(db: SQLite.SQLiteDatabase, eventId: number, grade: number, gradeMax: number): Promise<void> {
-  await db.runAsync(
+  db.runSync(
     `UPDATE prof_events SET grade = ?, grade_max = ?, grade_at = ?, done = 1 WHERE id = ?`,
     [grade, gradeMax, Date.now(), eventId]
   );
 }
 
 export async function getEventsWithGrades(db: SQLite.SQLiteDatabase, userId: string): Promise<ProfEvent[]> {
-  return await db.getAllAsync<ProfEvent>(
+  return db.getAllSync<ProfEvent>(
     `SELECT * FROM prof_events
      WHERE user_id = ? AND grade IS NOT NULL
      ORDER BY grade_at DESC
@@ -486,11 +482,11 @@ export async function getEventsWithGrades(db: SQLite.SQLiteDatabase, userId: str
 }
 
 export async function markEventDone(db: SQLite.SQLiteDatabase, eventId: number): Promise<void> {
-  await db.runAsync('UPDATE prof_events SET done = 1 WHERE id = ?', [eventId]);
+  db.runSync('UPDATE prof_events SET done = 1 WHERE id = ?', [eventId]);
 }
 
 export async function deleteProfEvent(db: SQLite.SQLiteDatabase, eventId: number): Promise<void> {
-  await db.runAsync('DELETE FROM prof_events WHERE id = ?', [eventId]);
+  db.runSync('DELETE FROM prof_events WHERE id = ?', [eventId]);
 }
 
 // ============================================================
@@ -520,7 +516,7 @@ function computeNextReviewAt(stage: number): number {
 
 export async function saveTopicProgress(db: SQLite.SQLiteDatabase, userId: string, subject: string, topic: string, result: 'success' | 'fail'): Promise<void> {
   const now = Date.now();
-  const existing = await db.getFirstAsync<ProfTopic>(`SELECT * FROM prof_topics WHERE user_id = ? AND subject = ? AND topic = ?`, [userId, subject, topic]);
+  const existing = db.getFirstSync<ProfTopic>(`SELECT * FROM prof_topics WHERE user_id = ? AND subject = ? AND topic = ?`, [userId, subject, topic]);
 
   if (existing && existing.id !== undefined) {
     let newStage = existing.review_stage;
@@ -535,7 +531,7 @@ export async function saveTopicProgress(db: SQLite.SQLiteDatabase, userId: strin
     }
 
     const nextReview = computeNextReviewAt(newStage);
-    await db.runAsync(
+    db.runSync(
       `UPDATE prof_topics SET status = ?, review_stage = ?, next_review_at = ?, times_seen = times_seen + 1, times_success = times_success + ?, last_seen = ? WHERE id = ?`,
       [newStatus, newStage, nextReview, result === 'success' ? 1 : 0, now, existing.id]
     );
@@ -543,7 +539,7 @@ export async function saveTopicProgress(db: SQLite.SQLiteDatabase, userId: strin
     const stage = result === 'success' ? 1 : 0;
     const status: ProfTopic['status'] = result === 'success' ? 'in_progress' : 'fragile';
     const nextReview = computeNextReviewAt(stage);
-    await db.runAsync(
+    db.runSync(
       `INSERT INTO prof_topics (user_id, subject, topic, status, review_stage, next_review_at, times_seen, times_success, last_seen, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
       [userId, subject, topic, status, stage, nextReview, result === 'success' ? 1 : 0, now, now]
     );
@@ -551,19 +547,19 @@ export async function saveTopicProgress(db: SQLite.SQLiteDatabase, userId: strin
 }
 
 export async function getAllTopics(db: SQLite.SQLiteDatabase, userId: string): Promise<ProfTopic[]> {
-  return await db.getAllAsync<ProfTopic>(`SELECT * FROM prof_topics WHERE user_id = ? ORDER BY subject ASC, last_seen DESC`, [userId]);
+  return db.getAllSync<ProfTopic>(`SELECT * FROM prof_topics WHERE user_id = ? ORDER BY subject ASC, last_seen DESC`, [userId]);
 }
 
 export async function getTopicsToReview(db: SQLite.SQLiteDatabase, userId: string): Promise<ProfTopic[]> {
-  return await db.getAllAsync<ProfTopic>(`SELECT * FROM prof_topics WHERE user_id = ? AND next_review_at <= ? AND status != 'acquired' ORDER BY next_review_at ASC LIMIT 5`, [userId, Date.now()]);
+  return db.getAllSync<ProfTopic>(`SELECT * FROM prof_topics WHERE user_id = ? AND next_review_at <= ? AND status != 'acquired' ORDER BY next_review_at ASC LIMIT 5`, [userId, Date.now()]);
 }
 
 export async function getFragileTopics(db: SQLite.SQLiteDatabase, userId: string): Promise<ProfTopic[]> {
-  return await db.getAllAsync<ProfTopic>(`SELECT * FROM prof_topics WHERE user_id = ? AND status = 'fragile' ORDER BY last_seen ASC LIMIT 3`, [userId]);
+  return db.getAllSync<ProfTopic>(`SELECT * FROM prof_topics WHERE user_id = ? AND status = 'fragile' ORDER BY last_seen ASC LIMIT 3`, [userId]);
 }
 
 export async function deleteTopic(db: SQLite.SQLiteDatabase, topicId: number): Promise<void> {
-  await db.runAsync('DELETE FROM prof_topics WHERE id = ?', [topicId]);
+  db.runSync('DELETE FROM prof_topics WHERE id = ?', [topicId]);
 }
 
 // ============================================================
@@ -588,12 +584,12 @@ export interface ProfState {
 }
 
 export async function getProfState(db: SQLite.SQLiteDatabase, userId: string): Promise<ProfState> {
-  let state = await db.getFirstAsync<ProfState>('SELECT * FROM prof_state WHERE user_id = ?', [userId]);
+  let state = db.getFirstSync<ProfState>('SELECT * FROM prof_state WHERE user_id = ?', [userId]);
 
   if (!state) {
     const now = Date.now();
-    await db.runAsync(`INSERT OR IGNORE INTO prof_state (user_id, updated_at) VALUES (?, ?)`, [userId, now]);
-    state = await db.getFirstAsync<ProfState>('SELECT * FROM prof_state WHERE user_id = ?', [userId]);
+    db.runSync(`INSERT OR IGNORE INTO prof_state (user_id, updated_at) VALUES (?, ?)`, [userId, now]);
+    state = db.getFirstSync<ProfState>('SELECT * FROM prof_state WHERE user_id = ?', [userId]);
     if (!state) {
       state = {
         user_id: userId,
@@ -619,7 +615,7 @@ export async function getProfState(db: SQLite.SQLiteDatabase, userId: string): P
 
 export async function markReviewOffered(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   const now = Date.now();
-  await db.runAsync(
+  db.runSync(
     `INSERT INTO prof_state (user_id, last_review_offer_at, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET last_review_offer_at = excluded.last_review_offer_at, updated_at = excluded.updated_at`,
     [userId, now, now]
@@ -635,7 +631,7 @@ export async function canOfferReviewToday(db: SQLite.SQLiteDatabase, userId: str
 
 export async function markMorningBriefingSent(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   const now = Date.now();
-  await db.runAsync(
+  db.runSync(
     `INSERT INTO prof_state (user_id, last_morning_briefing_at, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET last_morning_briefing_at = excluded.last_morning_briefing_at, updated_at = excluded.updated_at`,
     [userId, now, now]
@@ -656,7 +652,7 @@ export async function wasMorningBriefingSentToday(db: SQLite.SQLiteDatabase, use
 
 export async function enableMorningBriefing(db: SQLite.SQLiteDatabase, userId: string, hour: number, minute: number, notificationId: string): Promise<void> {
   const now = Date.now();
-  await db.runAsync(
+  db.runSync(
     `INSERT INTO prof_state (user_id, morning_briefing_hour, morning_briefing_minute, morning_briefing_enabled, morning_briefing_notification_id, updated_at)
      VALUES (?, ?, ?, 1, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET
@@ -670,7 +666,7 @@ export async function enableMorningBriefing(db: SQLite.SQLiteDatabase, userId: s
 }
 
 export async function disableMorningBriefing(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
-  await db.runAsync(
+  db.runSync(
     `UPDATE prof_state SET morning_briefing_enabled = 0, morning_briefing_notification_id = NULL, updated_at = ? WHERE user_id = ?`,
     [Date.now(), userId]
   );
@@ -678,7 +674,7 @@ export async function disableMorningBriefing(db: SQLite.SQLiteDatabase, userId: 
 
 export async function markEveningBriefingSent(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   const now = Date.now();
-  await db.runAsync(
+  db.runSync(
     `INSERT INTO prof_state (user_id, last_evening_briefing_at, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET last_evening_briefing_at = excluded.last_evening_briefing_at, updated_at = excluded.updated_at`,
     [userId, now, now]
@@ -699,7 +695,7 @@ export async function wasEveningBriefingSentToday(db: SQLite.SQLiteDatabase, use
 
 export async function enableEveningBriefing(db: SQLite.SQLiteDatabase, userId: string, hour: number, minute: number, notificationId: string): Promise<void> {
   const now = Date.now();
-  await db.runAsync(
+  db.runSync(
     `INSERT INTO prof_state (user_id, evening_briefing_hour, evening_briefing_minute, evening_briefing_enabled, evening_briefing_notification_id, updated_at)
      VALUES (?, ?, ?, 1, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET
@@ -713,14 +709,14 @@ export async function enableEveningBriefing(db: SQLite.SQLiteDatabase, userId: s
 }
 
 export async function updateEveningBriefingTime(db: SQLite.SQLiteDatabase, userId: string, hour: number, minute: number): Promise<void> {
-  await db.runAsync(
+  db.runSync(
     `UPDATE prof_state SET evening_briefing_hour = ?, evening_briefing_minute = ?, updated_at = ? WHERE user_id = ?`,
     [hour, minute, Date.now(), userId]
   );
 }
 
 export async function disableEveningBriefing(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
-  await db.runAsync(
+  db.runSync(
     `UPDATE prof_state SET evening_briefing_enabled = 0, evening_briefing_notification_id = NULL, updated_at = ? WHERE user_id = ?`,
     [Date.now(), userId]
   );
@@ -728,7 +724,7 @@ export async function disableEveningBriefing(db: SQLite.SQLiteDatabase, userId: 
 
 export async function markWeatherRefusalPrompted(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   const now = Date.now();
-  await db.runAsync(
+  db.runSync(
     `INSERT INTO prof_state (user_id, last_weather_refusal_prompt_at, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET last_weather_refusal_prompt_at = excluded.last_weather_refusal_prompt_at, updated_at = excluded.updated_at`,
     [userId, now, now]

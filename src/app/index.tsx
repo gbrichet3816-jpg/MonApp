@@ -242,7 +242,12 @@ export default function HomeScreen() {
 
   useEffect(() => {
     isMounted.current = true;
-    initDatabase();
+    console.log('🔥 typeof initDatabase =', typeof initDatabase);
+if (typeof initDatabase === 'function') {
+  initDatabase();
+} else {
+  console.error('❌ initDatabase n\'est pas une fonction !');
+}
     requestNotificationPermission();
     const profile = getLocalProfile();
     if (!profile) setNeedsOnboarding(true);
