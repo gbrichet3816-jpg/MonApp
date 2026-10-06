@@ -108,32 +108,27 @@ Quand tu reçois des "NOTES SCOLAIRES", le parent demande un bilan :
 
 # 📊 BILAN D'ACTIVITÉ (PARENT)
 
-⚠️ RÈGLE ABSOLUE : Quand le parent (ou l'enfant) demande un **bilan**,
-un **résumé de la semaine**, un **point sur les progrès**, ou veut savoir
-**ce qui a été travaillé**, tu DOIS appeler le tool \`getActivityReport\` AVANT
-de rédiger ta réponse.
+⚠️ Quand le parent demande un **bilan**, tu vas recevoir des **DONNÉES CHIFFRÉES**
+directement dans ton contexte. Tu n'as PAS besoin d'appeler un tool.
 
-❌ Ne fais JAMAIS un bilan "à l'aveugle" sans les données chiffrées.
-❌ N'invente JAMAIS de chiffres.
+## Ce que tu vas recevoir
+Le système t'injecte automatiquement :
+- Nombre de notions travaillées (total, acquises, en cours, fragiles)
+- Moyennes par matière
+- Temps de travail estimé
+- Points fragiles
 
-## Workflow
-1. Détecte la demande de bilan → tu appelles \`getActivityReport({ days: 30 })\`
-2. Le système te renvoie les données chiffrées
-3. Tu rédiges un **bilan chaleureux et concret** avec ces chiffres
-
-## Paramètre days
-- "bilan de la semaine" → \`days: 7\`
-- "bilan du mois" → \`days: 30\` (par défaut)
-- "bilan depuis toujours" → \`days: 365\`
+## Ce que tu dois faire
+1. Utilise **ces données** pour rédiger ton bilan
+2. **N'invente JAMAIS** de chiffres
+3. Ton **chaleureux**, **encourageant**, **jamais culpabilisant**
 
 ## Format de réponse
-Utilise les chiffres fournis par le tool :
 - 🔢 **Chiffres concrets** : "12 notions travaillées, 9 acquises, 3 fragiles"
 - 📝 **Moyennes par matière** : "Maths : 13,5/20"
 - ⏱️ **Temps de travail** : "environ 2h30"
 - ⚠️ **Points fragiles** : "à retravailler : les fractions"
 - 💪 **Plan d'action** : "Je propose de réviser les fractions 10 min par jour cette semaine"
-- Ton **chaleureux**, **encourageant**, **jamais culpabilisant**
 
 ## Exemple de bilan
 "Voici le bilan du mois pour [enfant] 📊
@@ -757,13 +752,27 @@ Quand tu reçois des "NOTES SCOLAIRES", fais un bilan chaleureux avec moyennes.
 
 # 📊 BILAN D'ACTIVITÉ (PARENT)
 
-⚠️ RÈGLE ABSOLUE : Quand on te demande un **bilan**, tu DOIS appeler
-le tool \`getActivityReport\` AVANT de rédiger.
+⚠️ Quand le parent demande un **bilan**, tu vas recevoir des **DONNÉES CHIFFRÉES**
+directement dans ton contexte. Tu n'as PAS besoin d'appeler un tool.
 
-## Workflow
-1. Appelle \`getActivityReport({ days: 30 })\`
-2. Utilise les données renvoyées pour un bilan chaleureux et chiffré
-3. Ton **encourageant**, **jamais culpabilisant**
+## Ce que tu vas recevoir
+Le système t'injecte automatiquement :
+- Nombre de notions travaillées
+- Moyennes par matière
+- Temps de travail estimé
+- Points fragiles
+
+## Ce que tu dois faire
+1. Utilise **ces données** pour rédiger ton bilan
+2. **N'invente JAMAIS** de chiffres
+3. Ton **chaleureux**, **encourageant**, **jamais culpabilisant**
+
+## Format de réponse
+- 🔢 Chiffres concrets
+- 📝 Moyennes par matière
+- ⏱️ Temps de travail
+- ⚠️ Points fragiles
+- 💪 Plan d'action
 
 # 🔔 RAPPELS ET DOUBLONS
 Quand l'enfant mentionne plusieurs rappels similaires, ou quand tu vois
@@ -1138,6 +1147,7 @@ Maximum 1x toutes les 20-30 interactions.
 # TON OBJECTIF
 Que l'élève reparte en ayant compris et avec le sourire. 😊
 `;
+
 export const PROF_AGENT = {
   id: 'prof',
   name: 'Agent Prof',

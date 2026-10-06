@@ -43,11 +43,10 @@ import {
   formatGradesForPrompt,
   formatPendingGradesContext,
   formatScheduleForPrompt,
-  formatTopicsForPrompt,
   formatTopicsToReview,
   getDateContext,
   isBilanRequest,
-  isGradesRequest,
+  isGradesRequest
 } from '@/agents/prof/helpers';
 import {
   cancelEveningBriefing,
@@ -150,6 +149,76 @@ function hasActiveQuiz(messages: ChatMessage[]): boolean {
   return last?.isQuiz === true;
 }
 
+// 🆕 Construit le bilan d'activité côté MOBILE (pas de tool needed)
+async function buildActivityReportText(userId: string, days: number): Promise<string> {
+  const profDb = await openProfDatabase();
+  const sinceDate = new Date();
+  sinceDate.setDate(sinceDate.getDate() - days);
+  const sinceTimestamp = sinceDate.getTime();
+
+  const allTopics = await getAllTopics(profDb, userId);
+  const recentTopics = allTopics.filter((t) => t.last_seen >= sinceTimestamp);
+  const eventsWithGrades = await getEventsWithGrades(profDb, userId);
+
+  const totalNotions = recentTopics.length;
+  const acquiredNotions = recentTopics.filter((t) => t.status === 'acquired').length;
+  const fragileNotions = recentTopics.filter((t) => t.status === 'fragile').length;
+  const inProgressNotions = recentTopics.filter((t) => t.status === 'in_progress').length;
+
+  const bySubject: Record<string, { count: number; total: number; totalMax: number }> = {};
+  for (const e of eventsWithGrades) {
+    const s = e.subject || 'Autre';
+    if (!bySubject[s]) bySubject[s] = { count: 0, total: 0, totalMax: 0 };
+    if (e.grade !== null && e.grade_max) {
+      bySubject[s].count++;
+      bySubject[s].total += e.grade;
+      bySubject[s].totalMax += e.grade_max;
+    }
+  }
+
+  const estimatedMinutes = recentTopics.reduce((acc, t) => acc + (t.times_seen * 2), 0);
+  const estimatedHours = Math.round((estimatedMinutes / 60) * 10) / 10;
+
+  const lines: string[] = [`# 📊 BILAN D'ACTIVITÉ — ${days} derniers jours`, ''];
+
+  if (totalNotions === 0) {
+    lines.push('Aucune notion travaillée sur cette période.');
+  } else {
+    lines.push('## 🧠 Notions travaillées');
+    lines.push(`- Total : ${totalNotions}`);
+    lines.push(`- ✅ Acquises : ${acquiredNotions}`);
+    lines.push(`- 🔄 En cours : ${inProgressNotions}`);
+    lines.push(`- ⚠️ Fragiles : ${fragileNotions}`);
+    lines.push('');
+    lines.push('## ⏱️ Temps de travail estimé');
+    lines.push(`- ${estimatedHours} h`);
+    lines.push('');
+
+    if (Object.keys(bySubject).length > 0) {
+      lines.push('## 📝 Moyennes par matière');
+      for (const [subject, stats] of Object.entries(bySubject)) {
+        const moyenne = stats.totalMax > 0 ? (stats.total / stats.totalMax) * 20 : 0;
+        lines.push(`- ${subject} : ${moyenne.toFixed(1)}/20 (${stats.count} note${stats.count > 1 ? 's' : ''})`);
+      }
+      lines.push('');
+    }
+
+    if (fragileNotions > 0) {
+      const fragiles = recentTopics.filter((t) => t.status === 'fragile').slice(0, 3);
+      lines.push('## ⚠️ Points fragiles à retravailler');
+      for (const t of fragiles) {
+        lines.push(`- ${t.subject} — ${t.topic}`);
+      }
+      lines.push('');
+    }
+  }
+
+  lines.push('👉 Avec ces données, rédige un BILAN chaleureux pour le parent (3-5 paragraphes).');
+  lines.push('Utilise les chiffres concrets, reste encourageant, propose un plan d\'action.');
+
+  return lines.join('\n');
+}
+
 // ============================================================
 // COMPOSANT PRINCIPAL
 // ============================================================
@@ -231,6 +300,7 @@ export default function HomeScreen() {
         return () => clearTimeout(timer);
       }
       if (selectedAgentId === 'prof') {
+        // 🆕 Délai augmenté à 2500ms pour laisser SQLite s'ouvrir
         const timer = setTimeout(() => {
           if (isMounted.current) {
             checkReviewProposal();
@@ -238,7 +308,7 @@ export default function HomeScreen() {
             checkEveningBriefing();
             checkWeatherCityPrompt();
           }
-        }, 800);
+        }, 2500);
         return () => clearTimeout(timer);
       }
     } else {
@@ -566,80 +636,6 @@ export default function HomeScreen() {
         return lines.join('\n');
       }
 
-      // 🆕 Bilan d'activité
-      if (call.name === 'getActivityReport') {
-        const days = parseInt(args.days) || 30;
-        const sinceDate = new Date();
-        sinceDate.setDate(sinceDate.getDate() - days);
-        const sinceTimestamp = sinceDate.getTime();
-
-        // 1. Récupérer les notions travaillées
-        const allTopics = await getAllTopics(profDb, userId);
-        const recentTopics = allTopics.filter((t) => t.last_seen >= sinceTimestamp);
-
-        // 2. Récupérer les notes
-        const eventsWithGrades = await getEventsWithGrades(profDb, userId);
-
-        // 3. Calculer les stats
-        const totalNotions = recentTopics.length;
-        const acquiredNotions = recentTopics.filter((t) => t.status === 'acquired').length;
-        const fragileNotions = recentTopics.filter((t) => t.status === 'fragile').length;
-        const inProgressNotions = recentTopics.filter((t) => t.status === 'in_progress').length;
-
-        // Moyennes par matière
-        const bySubject: Record<string, { count: number; total: number; totalMax: number }> = {};
-        for (const e of eventsWithGrades) {
-          const s = e.subject || 'Autre';
-          if (!bySubject[s]) bySubject[s] = { count: 0, total: 0, totalMax: 0 };
-          if (e.grade !== null && e.grade_max) {
-            bySubject[s].count++;
-            bySubject[s].total += e.grade;
-            bySubject[s].totalMax += e.grade_max;
-          }
-        }
-
-        // Temps de travail estimé (2 min par notion vue)
-        const estimatedMinutes = recentTopics.reduce((acc, t) => acc + (t.times_seen * 2), 0);
-        const estimatedHours = Math.round((estimatedMinutes / 60) * 10) / 10;
-
-        // Construction du texte
-        const lines: string[] = [`# 📊 Bilan d'activité — ${days} derniers jours`, ''];
-
-        if (totalNotions === 0) {
-          lines.push('Aucune notion travaillée sur cette période.');
-        } else {
-          lines.push('## 🧠 Notions travaillées');
-          lines.push(`- Total : **${totalNotions}**`);
-          lines.push(`- ✅ Acquises : **${acquiredNotions}**`);
-          lines.push(`- 🔄 En cours : **${inProgressNotions}**`);
-          lines.push(`- ⚠️ Fragiles : **${fragileNotions}**`);
-          lines.push('');
-          lines.push('## ⏱️ Temps de travail estimé');
-          lines.push(`- **${estimatedHours} h** (estimation)`);
-          lines.push('');
-
-          if (Object.keys(bySubject).length > 0) {
-            lines.push('## 📝 Moyennes par matière');
-            for (const [subject, stats] of Object.entries(bySubject)) {
-              const moyenne = stats.totalMax > 0 ? (stats.total / stats.totalMax) * 20 : 0;
-              lines.push(`- **${subject}** : ${moyenne.toFixed(1)}/20 (${stats.count} note${stats.count > 1 ? 's' : ''})`);
-            }
-            lines.push('');
-          }
-
-          if (fragileNotions > 0) {
-            const fragiles = recentTopics.filter((t) => t.status === 'fragile').slice(0, 3);
-            lines.push('## ⚠️ Points fragiles à retravailler');
-            for (const t of fragiles) {
-              lines.push(`- ${t.subject} — ${t.topic}`);
-            }
-            lines.push('');
-          }
-        }
-
-        return lines.join('\n');
-      }
-
       if (call.name === 'getSchedule') {
         const schedule = await getSchedule(profDb, userId);
         if (schedule.length === 0) return 'Aucun emploi du temps enregistré.';
@@ -888,15 +884,27 @@ export default function HomeScreen() {
       let systemPrompt = selectedAgent.systemPrompt;
       systemPrompt = `${systemPrompt}\n\n${getDateContext()}`;
 
+      // 🆕 BILAN : on appelle getActivityReport EN LOCAL et on injecte les données
       if (selectedAgent.id === 'prof' && isBilanRequest(text)) {
         try {
           const profDb = await openProfDatabase();
           const profile = getLocalProfile();
           const userId = profile?.code ?? 'default';
-          const topics = await getAllTopics(profDb, userId);
-          const dataText = formatTopicsForPrompt(topics);
-          systemPrompt = `${systemPrompt}\n\n${dataText}`;
-        } catch (e) { console.warn('[Prof] bilan:', e); }
+
+          // Détecte la période (7 jours / 30 jours / 365 jours)
+          const lower = text.toLowerCase();
+          let days = 30;
+          if (lower.includes('semaine')) days = 7;
+          else if (lower.includes('mois')) days = 30;
+          else if (lower.includes('toujours') || lower.includes('toujours')) days = 365;
+
+          console.log('📊 Bilan demandé — période :', days, 'jours');
+
+          const reportText = await buildActivityReportText(userId, days);
+          systemPrompt = `${systemPrompt}\n\n${reportText}`;
+        } catch (e) {
+          console.warn('[Prof] bilan:', e);
+        }
       }
 
       if (selectedAgent.id === 'prof' && isGradesRequest(text)) {
