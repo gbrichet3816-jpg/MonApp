@@ -242,12 +242,7 @@ export default function HomeScreen() {
 
   useEffect(() => {
     isMounted.current = true;
-    console.log('🔥 typeof initDatabase =', typeof initDatabase);
-if (typeof initDatabase === 'function') {
-  initDatabase();
-} else {
-  console.error('❌ initDatabase n\'est pas une fonction !');
-}
+    initDatabase();
     requestNotificationPermission();
     const profile = getLocalProfile();
     if (!profile) setNeedsOnboarding(true);
@@ -642,7 +637,9 @@ if (typeof initDatabase === 'function') {
       }
 
       if (call.name === 'getSchedule') {
+        console.log('📅 getSchedule | userId:', userId);
         const schedule = await getSchedule(profDb, userId);
+        console.log('📅 Résultat:', schedule.length, 'cours');
         if (schedule.length === 0) return 'Aucun emploi du temps enregistré.';
         const dayNames = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
         const lines: string[] = ['Emploi du temps :', ''];
@@ -857,7 +854,7 @@ if (typeof initDatabase === 'function') {
       return 'Erreur lors de l\'exécution du tool.';
     }
   };
-
+  
   const selectedAgent = AGENTS.find((a) => a.id === selectedAgentId);
   const headerTitle = selectedAgent ? selectedAgent.name : 'Aucun agent';
 
@@ -896,7 +893,6 @@ if (typeof initDatabase === 'function') {
           const profile = getLocalProfile();
           const userId = profile?.code ?? 'default';
 
-          // Détecte la période (7 jours / 30 jours / 365 jours)
           const lower = text.toLowerCase();
           let days = 30;
           if (lower.includes('semaine')) days = 7;
@@ -1430,7 +1426,7 @@ if (typeof initDatabase === 'function') {
     setFileModalVisible(false);
     setPendingFile(null);
   };
-
+  
   const handlePhotoTaken = (photoUri: string, base64?: string) => {
     setPendingPhoto({ uri: photoUri, base64 });
     setPhotoModalVisible(true);
