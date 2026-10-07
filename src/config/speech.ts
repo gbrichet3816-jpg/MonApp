@@ -248,8 +248,7 @@ async function speakBlocks(
 
 /**
  * Lit un texte à voix haute NORMALEMENT (chat classique).
- * Utilise Supertonic-3 si dispo, sinon fallback expo-speech.
- * Pas de coupure (sauf si > 3500 caractères).
+ * Vitesse : 1.1 (légèrement plus rapide que 1.0 pour un rendu plus naturel).
  */
 export function speakText(text: string, onDone?: () => void) {
   ttsStop();
@@ -264,7 +263,7 @@ export function speakText(text: string, onDone?: () => void) {
 
   if (cleanText.length <= 3500) {
     // Lecture d'un seul bloc
-    ttsSpeak(cleanText, 0.95, {
+    ttsSpeak(cleanText, 1.1, {
       onDone: () => {
         isSpeaking = false;
         onDone?.();
@@ -280,14 +279,13 @@ export function speakText(text: string, onDone?: () => void) {
   } else {
     // Texte très long → découpage par blocs
     const blocks = splitIntoBlocks(cleanText);
-    speakBlocks(blocks, 0.95, onDone);
+    speakBlocks(blocks, 1.1, onDone);
   }
 }
 
 /**
  * Lit un texte LENTEMENT pour une dictée.
- * Utilise Supertonic-3 si dispo, sinon fallback expo-speech.
- * Découpage intelligent avec pauses longues.
+ * Vitesse : 0.6 (lente, adaptée pour écrire).
  */
 export function speakTextSlow(text: string, onDone?: () => void) {
   ttsStop();
