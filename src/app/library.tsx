@@ -56,6 +56,7 @@ export default function LibraryScreen() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [friendPickerVisible, setFriendPickerVisible] = useState(false);
+  const [activeTab, setActiveTab] = useState<'written' | 'audio'>('written');
 
   useEffect(() => {
     loadAll();
@@ -240,9 +241,6 @@ export default function LibraryScreen() {
     setFriendPickerVisible(true);
   };
 
-  /**
-   * 🆕 Fix bug #16 : lit le fichier en base64 avant de partager.
-   */
   const handleFriendsSelected = async (friendCodes: string[]) => {
     setFriendPickerVisible(false);
 
@@ -257,7 +255,6 @@ export default function LibraryScreen() {
     let failCount = 0;
 
     for (const doc of docs) {
-      // 🆕 Lire le contenu binaire si le document a un fichier physique
       let fileData: string | undefined;
       if (doc.filePath) {
         try {
@@ -344,6 +341,12 @@ export default function LibraryScreen() {
     return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
   };
 
+  // 🆕 Filtrage Écrits / Audios
+  const isAudioDoc = (doc: Document) => doc.fileType?.startsWith('audio/') === true;
+  const writtenDocs = documents.filter((d) => !isAudioDoc(d));
+  const audioDocs = documents.filter((d) => isAudioDoc(d));
+  const currentDocs = activeTab === 'written' ? writtenDocs : audioDocs;
+
   // ===== MODE SÉLECTION =====
   if (selectionMode) {
     return (
@@ -359,12 +362,13 @@ export default function LibraryScreen() {
         </View>
 
         <FlatList
-          data={documents}
+          data={currentDocs}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => {
             const isSelected = selectedIds.includes(item.id);
             const isImage = item.fileType?.startsWith('image/') && item.filePath;
+            const isAudio = item.fileType?.startsWith('audio/') === true;
 
             return (
               <TouchableOpacity
@@ -386,7 +390,11 @@ export default function LibraryScreen() {
                     resizeMode="cover"
                   />
                 ) : (
-                  <Ionicons name="document-text-outline" size={24} color={Colors.light.primary} />
+                  <Ionicons
+                    name={isAudio ? 'mic-outline' : 'document-text-outline'}
+                    size={24}
+                    color={Colors.light.primary}
+                  />
                 )}
 
                 <View style={styles.docItemText}>
@@ -524,8 +532,43 @@ export default function LibraryScreen() {
         )}
       </View>
 
+      {/* 🆕 Onglets : Écrits / Audios */}
+      <View style={styles.tabsBar}>
+        <TouchableOpacity
+          style={[styles.tabButton, activeTab === 'written' && styles.tabButtonActive]}
+          onPress={() => setActiveTab('written')}
+        >
+          <Ionicons
+            name="document-text-outline"
+            size={18}
+            color={activeTab === 'written' ? Colors.light.background : Colors.light.primary}
+          />
+          <Text
+            style={[styles.tabText, activeTab === 'written' && styles.tabTextActive]}
+          >
+            Écrits ({writtenDocs.length})
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tabButton, activeTab === 'audio' && styles.tabButtonActive]}
+          onPress={() => setActiveTab('audio')}
+        >
+          <Ionicons
+            name="mic-outline"
+            size={18}
+            color={activeTab === 'audio' ? Colors.light.background : Colors.light.primary}
+          />
+          <Text
+            style={[styles.tabText, activeTab === 'audio' && styles.tabTextActive]}
+          >
+            Audios ({audioDocs.length})
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       <FlatList
-        data={documents}
+        data={currentDocs}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
@@ -574,18 +617,27 @@ export default function LibraryScreen() {
           </>
         }
         ListEmptyComponent={
-          pendingDocs.length === 0 ? (
+          pendingDocs.length === 0 && currentDocs.length === 0 ? (
             <View style={styles.emptyContainer}>
-              <Ionicons name="book-outline" size={64} color={Colors.light.textSecondary} />
-              <Text style={styles.emptyTitle}>Bibliothèque vide</Text>
+              <Ionicons
+                name={activeTab === 'audio' ? 'mic-outline' : 'book-outline'}
+                size={64}
+                color={Colors.light.textSecondary}
+              />
+              <Text style={styles.emptyTitle}>
+                {activeTab === 'audio' ? 'Aucun audio' : 'Bibliothèque vide'}
+              </Text>
               <Text style={styles.emptyText}>
-                Les documents créés par tes agents apparaîtront ici.
+                {activeTab === 'audio'
+                  ? 'Tes enregistrements audio apparaîtront ici.'
+                  : 'Les documents créés par tes agents apparaîtront ici.'}
               </Text>
             </View>
           ) : null
         }
         renderItem={({ item }) => {
           const isImage = item.fileType?.startsWith('image/') && item.filePath;
+          const isAudio = item.fileType?.startsWith('audio/') === true;
 
           return (
             <TouchableOpacity
@@ -600,7 +652,11 @@ export default function LibraryScreen() {
                   resizeMode="cover"
                 />
               ) : (
-                <Ionicons name="document-text-outline" size={24} color={Colors.light.primary} />
+                <Ionicons
+                  name={isAudio ? 'mic-outline' : 'document-text-outline'}
+                  size={24}
+                  color={Colors.light.primary}
+                />
               )}
               <View style={styles.docItemText}>
                 <Text style={styles.docItemTitle} numberOfLines={1}>{item.title}</Text>
@@ -777,6 +833,37 @@ const styles = StyleSheet.create({
   actionButtonText: {
     fontSize: 12,
     fontWeight: '600',
+    color: Colors.light.background,
+  },
+  // 🆕 Onglets
+  tabsBar: {
+    flexDirection: 'row',
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    gap: Spacing.two,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+  },
+  tabButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: Spacing.two,
+    borderRadius: Spacing.two,
+    backgroundColor: Colors.light.backgroundElement,
+    gap: Spacing.one,
+  },
+  tabButtonActive: {
+    backgroundColor: Colors.light.primary,
+  },
+  tabText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.light.primary,
+  },
+  tabTextActive: {
     color: Colors.light.background,
   },
 });

@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useEffect, useState } from 'react';
 import {
@@ -7,6 +8,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import Markdown from 'react-native-markdown-display';
@@ -28,13 +30,11 @@ type Props = {
 function detectFullHtml(text: string): string | null {
   if (!text) return null;
 
-  // Cas 1 : DOCTYPE complet
   const doctypeIdx = text.indexOf('<!DOCTYPE');
   if (doctypeIdx !== -1) {
     return text.substring(doctypeIdx).trim();
   }
 
-  // Cas 2 : beaucoup de balises HTML structurantes (fallback)
   const htmlCount = (text.match(/<(h1|h2|h3|table|tr|td|div|section|article|ul|ol|p)\b/gi) || []).length;
   if (htmlCount >= 5) {
     return text.trim();
@@ -84,6 +84,7 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
 
   const isImage = fileType?.startsWith('image/');
   const isPdf = fileType?.includes('pdf');
+  const isAudio = fileType?.startsWith('audio/');
   const isText =
     fileType?.startsWith('text/') ||
     fileType?.includes('json') ||
@@ -109,6 +110,11 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
       setIsLoading(false);
     }
   };
+
+  // ===== AUDIO =====
+  if (isAudio && filePath) {
+    return <AudioViewer filePath={filePath} title={title} />;
+  }
 
   // ===== IMAGE =====
   if (isImage && filePath) {
@@ -196,11 +202,103 @@ export default function DocumentViewer({ filePath, fileType, title, content }: P
 }
 
 // ============================================================
+// 🎙️ LECTEUR AUDIO
+// ============================================================
+function AudioViewer({ filePath, title }: { filePath: string; title: string }) {
+  const player = useAudioPlayer({ uri: filePath });
+  const status = useAudioPlayerStatus(player);
+  const [hasPlayed, setHasPlayed] = useState(false);
+
+  const currentSec = Math.floor(status.currentTime || 0);
+  const totalSec = Math.floor(status.duration || 0);
+  const progress = totalSec > 0 ? Math.min(1, currentSec / totalSec) : 0;
+
+  const formatTime = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  };
+
+  const handleTogglePlay = () => {
+    try {
+      if (status.playing) {
+        player.pause();
+      } else {
+        if (status.didJustFinish || currentSec >= totalSec) {
+          player.seekTo(0);
+        }
+        player.play();
+        setHasPlayed(true);
+      }
+    } catch (e) {
+      console.warn('[AudioViewer] play/pause:', e);
+    }
+  };
+
+  const handleSeek = (direction: 'back' | 'forward') => {
+    const delta = direction === 'back' ? -10 : 10;
+    const next = Math.max(0, Math.min(totalSec, currentSec + delta));
+    try {
+      player.seekTo(next);
+    } catch (e) {
+      console.warn('[AudioViewer] seek:', e);
+    }
+  };
+
+  return (
+    <View style={audioStyles.container}>
+      <View style={audioStyles.iconCircle}>
+        <Ionicons name="mic" size={48} color={Colors.light.primary} />
+      </View>
+
+      <Text style={audioStyles.title} numberOfLines={2}>
+        {title}
+      </Text>
+
+      <View style={audioStyles.timeline}>
+        <Text style={audioStyles.timeText}>{formatTime(currentSec)}</Text>
+        <View style={audioStyles.progressBar}>
+          <View style={[audioStyles.progressFill, { width: `${progress * 100}%` }]} />
+        </View>
+        <Text style={audioStyles.timeText}>{formatTime(totalSec)}</Text>
+      </View>
+
+      <View style={audioStyles.controls}>
+        <TouchableOpacity
+          style={audioStyles.skipButton}
+          onPress={() => handleSeek('back')}
+        >
+          <Ionicons name="play-back" size={26} color={Colors.light.primary} />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={audioStyles.playButton} onPress={handleTogglePlay}>
+          <Ionicons
+            name={status.playing ? 'pause' : 'play'}
+            size={36}
+            color={Colors.light.background}
+          />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={audioStyles.skipButton}
+          onPress={() => handleSeek('forward')}
+        >
+          <Ionicons name="play-forward" size={26} color={Colors.light.primary} />
+        </TouchableOpacity>
+      </View>
+
+      {hasPlayed && status.didJustFinish && (
+        <Text style={audioStyles.hintText}>✅ Lecture terminée</Text>
+      )}
+    </View>
+  );
+}
+
+// ============================================================
 // RENDERER DE CONTENU
 // ============================================================
 function ContentRenderer({ content }: { content: string }) {
   // 1️⃣ PRIORITÉ ABSOLUE : HTML complet (fiches de révision)
-  //    → Tout dans le WebView, JAMAIS de Markdown par-dessus
   const fullHtml = detectFullHtml(content);
   if (fullHtml) {
     return (
@@ -326,7 +424,6 @@ function FullscreenVisual({
 </body>
 </html>`;
   } else {
-    // HTML : envoi TEL QUEL (le WebView le rendra)
     htmlContent = code;
   }
 
@@ -400,4 +497,81 @@ const styles = StyleSheet.create({
   unknownContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: Spacing.five, gap: Spacing.three },
   unknownTitle: { fontSize: 20, fontFamily: Fonts.semibold, fontWeight: '600' as const, color: Colors.light.text, textAlign: 'center' },
   unknownHint: { fontSize: 13, fontFamily: Fonts.regular, color: Colors.light.textSecondary, fontStyle: 'italic' as const, textAlign: 'center' },
+});
+
+const audioStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.five,
+    gap: Spacing.four,
+    backgroundColor: Colors.light.background,
+  },
+  iconCircle: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: Colors.light.backgroundElement,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  title: {
+    fontSize: 18,
+    fontFamily: Fonts.semibold,
+    fontWeight: '600',
+    color: Colors.light.text,
+    textAlign: 'center',
+  },
+  timeline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    gap: Spacing.two,
+  },
+  timeText: {
+    fontSize: 13,
+    fontFamily: Fonts.regular,
+    color: Colors.light.textSecondary,
+    minWidth: 36,
+    textAlign: 'center',
+  },
+  progressBar: {
+    flex: 1,
+    height: 6,
+    backgroundColor: Colors.light.border,
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: 6,
+    backgroundColor: Colors.light.primary,
+  },
+  controls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.four,
+  },
+  skipButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.light.backgroundElement,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playButton: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: Colors.light.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  hintText: {
+    fontSize: 13,
+    fontFamily: Fonts.regular,
+    color: Colors.light.textSecondary,
+    fontStyle: 'italic',
+  },
 });
