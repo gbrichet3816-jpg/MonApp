@@ -45,7 +45,8 @@
       "expo-notifications",
       "expo-sharing",
       "react-native-blob-util",
-      "expo-font"
+      "expo-font",
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true,

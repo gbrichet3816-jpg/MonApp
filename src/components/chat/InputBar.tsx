@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useState } from 'react';
-import { Alert, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import { Colors, Spacing } from '@/constants/theme';
+import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import FileImporter, { ImportedFile } from './FileImporter';
 
@@ -11,6 +12,8 @@ type Props = {
   onSend: (text: string) => void;
   onFilePicked?: (file: ImportedFile) => void;
   onPhotoTaken?: (photoUri: string, base64?: string) => void;
+  /** 🆕 Appelé quand un enregistrement audio est terminé */
+  onAudioRecorded?: (uri: string, durationMs: number) => void;
   disabled?: boolean;
   /** 🆕 Désactive complètement le micro (utile pendant un quiz) */
   micDisabled?: boolean;
@@ -23,10 +26,18 @@ type Props = {
   resetKey?: string | number;
 };
 
+function formatDuration(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 export default function InputBar({
   onSend,
   onFilePicked,
   onPhotoTaken,
+  onAudioRecorded,
   disabled = false,
   micDisabled = false,
   placeholder = 'Écris un message...',
@@ -42,8 +53,15 @@ export default function InputBar({
       if (micDisabled) return;
       setText(transcript);
     },
-    // 🆕 On passe micDisabled au hook pour qu'il court-circuite complètement
     disabled: micDisabled,
+  });
+
+  // 🆕 Enregistreur audio (5 min max, .m4a)
+  const audio = useAudioRecorder({
+    disabled: disabled || micDisabled,
+    onRecorded: (uri, durationMs) => {
+      onAudioRecorded?.(uri, durationMs);
+    },
   });
 
   // Reset du champ quand resetKey change
@@ -69,6 +87,13 @@ export default function InputBar({
       setText('');
     }
   }, [micDisabled, isListening]);
+
+  // Si disabled devient true pendant un enregistrement, on annule
+  useEffect(() => {
+    if (disabled && audio.isRecording) {
+      audio.cancel();
+    }
+  }, [disabled, audio.isRecording]);
 
   const handleSend = () => {
     const trimmed = text.trim();
@@ -136,10 +161,49 @@ export default function InputBar({
     }
   };
 
+  // 🆕 Enregistrement audio
+  const handleAudioPress = async () => {
+    if (disabled || micDisabled) return;
+    if (audio.isRecording) return;
+    await audio.start();
+  };
+
+  const handleAudioValidate = () => {
+    audio.stop();
+  };
+
+  const handleAudioCancel = () => {
+    audio.cancel();
+  };
+
   if (error === 'permission-denied') {
     Alert.alert(
       'Permission refusée',
       'Autorise le micro dans les paramètres de ton téléphone.',
+    );
+  }
+
+  // 🆕 Barre d'enregistrement audio (remplace toute la grid pendant l'enregistrement)
+  if (audio.isRecording) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.recordingBanner}>
+          <View style={styles.recordingDot} />
+          <Text style={styles.recordingTime}>
+            {formatDuration(audio.elapsedMs)} / {formatDuration(audio.maxDurationMs)}
+          </Text>
+          <Text style={styles.recordingHint}>Enregistrement…</Text>
+        </View>
+
+        <View style={styles.grid}>
+          <TouchableOpacity style={styles.gridButtonRed} onPress={handleAudioCancel}>
+            <Ionicons name="close" size={22} color={Colors.light.background} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.gridButtonGreen} onPress={handleAudioValidate}>
+            <Ionicons name="checkmark" size={22} color={Colors.light.background} />
+          </TouchableOpacity>
+        </View>
+      </View>
     );
   }
 
@@ -185,6 +249,7 @@ export default function InputBar({
             <Ionicons name="attach" size={20} color={Colors.light.primary} />
           </TouchableOpacity>
 
+          {/* 🎤 Reconnaissance vocale (texte) */}
           <TouchableOpacity
             style={[
               styles.gridButton,
@@ -195,6 +260,22 @@ export default function InputBar({
           >
             <Ionicons
               name="mic"
+              size={20}
+              color={micDisabled ? Colors.light.textSecondary : Colors.light.primary}
+            />
+          </TouchableOpacity>
+
+          {/* 🎙️ Enregistrement audio (5 min max, .m4a) */}
+          <TouchableOpacity
+            style={[
+              styles.gridButton,
+              (disabled || micDisabled) && styles.buttonDisabled,
+            ]}
+            onPress={handleAudioPress}
+            disabled={disabled || micDisabled}
+          >
+            <Ionicons
+              name="radio-outline"
               size={20}
               color={micDisabled ? Colors.light.textSecondary : Colors.light.primary}
             />
@@ -285,5 +366,32 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     opacity: 0.5,
+  },
+  // 🆕 Barre d'enregistrement
+  recordingBanner: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.light.backgroundElement,
+    borderRadius: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.three,
+    gap: Spacing.two,
+  },
+  recordingDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: Colors.light.error,
+  },
+  recordingTime: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.light.text,
+  },
+  recordingHint: {
+    fontSize: 13,
+    color: Colors.light.textSecondary,
+    marginLeft: 'auto',
   },
 });
