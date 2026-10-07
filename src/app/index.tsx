@@ -1708,11 +1708,12 @@ export default function HomeScreen() {
       />
       <KeyboardAvoidingView style={styles.body} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <MessageList
-          messages={messages}
-          emptyText={emptyText}
-          onQuizAnswer={handleQuizAnswer}
-          onRetry={handleRetry}
-        />
+  messages={messages}
+  emptyText={emptyText}
+  agentId={selectedAgentId ?? undefined}
+  onQuizAnswer={handleQuizAnswer}
+  onRetry={handleRetry}
+/>
         <InputBar
           onSend={handleSend}
           onFilePicked={handleFilePicked}
