@@ -43,32 +43,22 @@ type Props = {
 function cleanDsmlTags(text: string): string {
   if (!text) return '';
 
-  // 🆕 Détection : si le texte contient beaucoup de DSML, c'est que Prof
-  // a mal formulé sa réponse → on nettoie TOUT le DSML et on garde
-  // seulement le texte "propre" s'il existe.
   const dsmlCount = (text.match(/DSML/gi) || []).length;
 
-  // Si le message est quasi exclusivement du DSML → on renvoie un message neutre
   if (dsmlCount >= 2) {
     let cleaned = text
-      // Blocs <||DSML||>...</||DSML||>
       .replace(/<\|+\s*DSML\s*\|+>[\s\S]*?<\/\|+\s*DSML\s*\|+>/gi, '')
-      // Balises orphelines <||DSML||> et </||DSML||>
       .replace(/<\/?\|+\s*DSML\s*\|+[^>]*>/gi, '')
-      // Lignes vides multiples
       .replace(/\n{3,}/g, '\n\n')
-      // Espaces multiples
       .replace(/[ \t]{2,}/g, ' ')
       .trim();
 
-    // Si après nettoyage il ne reste plus rien → message neutre
     if (cleaned.length < 5) {
       return '[Action en cours…]';
     }
     return cleaned;
   }
 
-  // Cas normal : nettoyage standard
   return text
     .replace(/<+\|+\|?\s*DSML\s*\|?\|+>+/gi, '')
     .replace(/<\/+\|+\|?\s*DSML\s*\|?\|+>+/gi, '')
@@ -618,6 +608,7 @@ export default function Message({
     );
   }
 
+  // ✅ CORRECTIF BUG #9 : bloc visuel AVEC bouton TTS
   if (visual) {
     return (
       <View style={[styles.container, styles.agentContainer]}>
@@ -630,6 +621,13 @@ export default function Message({
             title={visual.title}
             code={visual.code}
           />
+          <TouchableOpacity style={styles.speakButton} onPress={handleSpeak}>
+            <Ionicons
+              name={isPlaying ? 'stop-circle-outline' : 'volume-medium-outline'}
+              size={20}
+              color={Colors.light.primary}
+            />
+          </TouchableOpacity>
         </View>
       </View>
     );
