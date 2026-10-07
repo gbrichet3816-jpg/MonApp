@@ -69,6 +69,7 @@ import {
   scheduleMultipleOneTimeReminders,
   scheduleRelativeReminder,
 } from '@/agents/sante/reminders';
+import AudioMessageModal, { AudioAction } from '@/components/chat/AudioMessageModal';
 import { FileAction, ImportedFile } from '@/components/chat/FileImporter';
 import FileMessageModal from '@/components/chat/FileMessageModal';
 import InputBar from '@/components/chat/InputBar';
@@ -149,7 +150,6 @@ function hasActiveQuiz(messages: ChatMessage[]): boolean {
   return last?.isQuiz === true;
 }
 
-// 🆕 Récupère toutes les questions de quiz déjà posées dans la conversation
 function getPastQuizQuestions(messages: ChatMessage[]): string[] {
   const questions: string[] = [];
   for (const m of messages) {
@@ -249,6 +249,9 @@ export default function HomeScreen() {
   const [fileModalVisible, setFileModalVisible] = useState(false);
   const [pendingPhoto, setPendingPhoto] = useState<{ uri: string; base64?: string } | null>(null);
   const [photoModalVisible, setPhotoModalVisible] = useState(false);
+  // 🆕 Audio V1
+  const [pendingAudio, setPendingAudio] = useState<{ uri: string; durationMs: number } | null>(null);
+  const [audioModalVisible, setAudioModalVisible] = useState(false);
   const [prefillText, setPrefillText] = useState('');
   const isMounted = useRef(true);
 
@@ -989,10 +992,9 @@ export default function HomeScreen() {
         }
       }
 
-      // 🆕 Injecter les questions déjà posées pour éviter la répétition
       if (selectedAgent.id === 'prof') {
         const lowerText = text.toLowerCase();
-                const wantsQuiz = /quiz|quizz|interroge|teste[- ]moi|questions sur|pose[- ]moi|nouveau\s+quiz|nouveau\s+quizz/.test(lowerText);
+        const wantsQuiz = /quiz|quizz|interroge|teste[- ]moi|questions sur|pose[- ]moi|nouveau\s+quiz|nouveau\s+quizz/.test(lowerText);
         if (wantsQuiz) {
           const pastQuestions = getPastQuizQuestions(messages);
           if (pastQuestions.length > 0) {
@@ -1062,7 +1064,6 @@ export default function HomeScreen() {
           }
 
           if (quizData) {
-            // 1) Module quiz
             const quizMessage: ChatMessage = {
               id: `agent-quiz-${Date.now()}`,
               text: '',
@@ -1074,7 +1075,6 @@ export default function HomeScreen() {
             setMessages((prev) => [...prev, quizMessage]);
             saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
 
-            // 2) Message d'encouragement APRÈS le module (spacer pour centrer)
             const encouragementMsg: ChatMessage = {
               id: `agent-quiz-enc-${Date.now()}`,
               text: `💪 À toi de jouer ! Prends ton temps, je suis là si tu as besoin d'un indice.`,
@@ -1665,6 +1665,115 @@ export default function HomeScreen() {
     setPendingPhoto(null);
   };
 
+  // ============================================================
+  // 🎙️ AUDIO V1 — handlers
+  // ============================================================
+
+  const handleAudioRecorded = (audioUri: string, durationMs: number) => {
+    setPendingAudio({ uri: audioUri, durationMs });
+    setAudioModalVisible(true);
+  };
+
+  const handleAudioSend = async (message: string, action: AudioAction) => {
+    setAudioModalVisible(false);
+    if (!pendingAudio || !selectedAgent) return;
+
+    const fileName = `audio_${Date.now()}.m4a`;
+    const title = `Audio du ${new Date().toLocaleDateString('fr-FR')}`;
+
+    if (action === 'save' || action === 'agent+save') {
+      const docId = `doc-audio-${Date.now()}`;
+      const savedPath = await saveFileToDocuments(pendingAudio.uri, fileName);
+      saveDocument({
+        id: docId,
+        agentId: selectedAgent.id,
+        title,
+        content: message || '',
+        filePath: savedPath || undefined,
+        fileType: 'audio/m4a',
+      });
+
+      if (action === 'save') {
+        Alert.alert('Enregistré !', `"${title}" est dans ta bibliothèque.`);
+        setPendingAudio(null);
+        return;
+      }
+    }
+
+    const userText = message || 'Écoute cet audio';
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      text: message ? `🎙️ ${message}` : '🎙️ [Audio envoyé]',
+      isUser: true,
+    };
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
+    saveMessage({
+      id: userMessage.id,
+      agentId: selectedAgent.id,
+      text: userMessage.text,
+      isUser: true,
+    });
+
+    setIsLoading(true);
+
+    try {
+      const durationSec = Math.round(pendingAudio.durationMs / 1000);
+      const content = `${userText}\n\n[Un fichier audio de ${durationSec}s est joint à ce message. La transcription automatique arrivera dans une prochaine version.]`;
+
+      const apiMessages: ApiMessage[] = [
+        ...newMessages.slice(0, -1).map((m) => ({
+          role: m.isUser ? ('user' as const) : ('assistant' as const),
+          content: m.text,
+        })),
+        { role: 'user', content },
+      ];
+
+      const systemPromptWithDate = `${selectedAgent.systemPrompt}\n\n${getDateContext()}`;
+
+      const result = await sendMessageToAgent({
+        messages: apiMessages,
+        agentSystemPrompt: systemPromptWithDate,
+        enableTools: (selectedAgent as any).enableTools === true,
+        agentId: selectedAgent.id,
+      });
+
+      if (!isMounted.current) return;
+
+      if (result.reply && result.reply.trim().length > 0) {
+        const agentMessage: ChatMessage = {
+          id: `agent-${Date.now()}`,
+          text: result.reply,
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, agentMessage]);
+        saveMessage({
+          id: agentMessage.id,
+          agentId: selectedAgent.id,
+          text: agentMessage.text,
+          isUser: false,
+        });
+      }
+    } catch (error) {
+      const errorMessage: ChatMessage = {
+        id: `error-${Date.now()}`,
+        text: `Erreur : ${error instanceof Error ? error.message : 'inconnue'}`,
+        isUser: false,
+        isError: true,
+        originalText: userText,
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      if (isMounted.current) setIsLoading(false);
+      setPendingAudio(null);
+    }
+  };
+
+  const handleAudioCancel = () => {
+    setAudioModalVisible(false);
+    setPendingAudio(null);
+  };
+
   const handleQuizAnswer = async (
     messageId: string,
     questionIndex: number,
@@ -1746,11 +1855,11 @@ export default function HomeScreen() {
           onQuizAnswer={handleQuizAnswer}
           onRetry={handleRetry}
         />
-        {/* 🆕 InputBar toujours visible (sert à centrer le module quiz) */}
         <InputBar
           onSend={handleSend}
           onFilePicked={handleFilePicked}
           onPhotoTaken={handlePhotoTaken}
+          onAudioRecorded={handleAudioRecorded}
           disabled={!selectedAgent || isLoading}
           micDisabled={hasActiveQuiz(messages)}
           prefillText={prefillText}
@@ -1776,6 +1885,13 @@ export default function HomeScreen() {
         photoUri={pendingPhoto?.uri || ''}
         onSend={handlePhotoSend}
         onCancel={handlePhotoCancel}
+      />
+      <AudioMessageModal
+        visible={audioModalVisible}
+        audioUri={pendingAudio?.uri || null}
+        audioDurationMs={pendingAudio?.durationMs || 0}
+        onSend={handleAudioSend}
+        onCancel={handleAudioCancel}
       />
     </SafeAreaView>
   );
