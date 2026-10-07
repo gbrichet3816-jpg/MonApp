@@ -22,7 +22,6 @@ export type ChatMessage = {
 type Props = {
   messages: ChatMessage[];
   emptyText: string;
-  /** 🆕 Identifiant de l'agent actif — permet de détecter un changement d'agent */
   agentId?: string;
   onQuizAnswer?: (messageId: string, questionIndex: number, userAnswer: string) => void;
   onRetry?: (originalText: string) => void;
@@ -35,9 +34,7 @@ export default function MessageList({ messages, emptyText, agentId, onQuizAnswer
   const isUserScrolling = useRef(false);
   const isAtBottom = useRef(true);
   const lastMessageIdRef = useRef<string | null>(null);
-  // Flag : a-t-on déjà scrollé au moins 1 fois après chargement initial ?
   const hasInitialScrolled = useRef(false);
-  // 🆕 Flag : dernier agentId connu, pour détecter un changement
   const lastAgentIdRef = useRef<string | undefined>(agentId);
 
   const visibleMessages = messages.filter((msg) => {
@@ -58,10 +55,8 @@ export default function MessageList({ messages, emptyText, agentId, onQuizAnswer
 
   const lastMessage = visibleMessages[visibleMessages.length - 1];
   const lastMessageId = lastMessage?.id || null;
-  const hasActiveQuiz = lastMessage?.isQuiz === true;
   const messagesCount = visibleMessages.length;
 
-  // 🆕 Reset du flag quand la liste devient vide (changement d'agent)
   useEffect(() => {
     if (messagesCount === 0) {
       hasInitialScrolled.current = false;
@@ -69,24 +64,20 @@ export default function MessageList({ messages, emptyText, agentId, onQuizAnswer
     }
   }, [messagesCount]);
 
-  // 🆕 BUG #13 FIX : Scroll auto quand l'agent change
+  // BUG #13 : Scroll auto quand l'agent change
   useEffect(() => {
     if (!agentId) return;
     if (lastAgentIdRef.current === agentId) return;
 
-    // L'agent vient de changer : on force le scroll en bas après le rendu
     lastAgentIdRef.current = agentId;
 
-    // Reset les flags pour permettre le scroll
     hasInitialScrolled.current = false;
     isAtBottom.current = true;
     isUserScrolling.current = false;
     lastMessageIdRef.current = null;
 
-    // Scroll immédiat (au cas où les messages sont déjà rendus)
     scrollRef.current?.scrollToEnd({ animated: false });
 
-    // Puis un 2e scroll après un court délai (pour laisser le temps au rendu)
     const timer = setTimeout(() => {
       scrollRef.current?.scrollToEnd({ animated: false });
       hasInitialScrolled.current = true;
@@ -96,15 +87,12 @@ export default function MessageList({ messages, emptyText, agentId, onQuizAnswer
     return () => clearTimeout(timer);
   }, [agentId, lastMessageId]);
 
-  // Scroll initial : dès que le contenu est prêt, on scrolle EN BAS sans animation
   const handleContentSizeChange = useCallback((_w: number, h: number) => {
     if (hasInitialScrolled.current) return;
     if (h <= 0) return;
 
-    // On scrolle en bas immédiatement (pas d'animation)
     scrollRef.current?.scrollToEnd({ animated: false });
 
-    // Puis une 2e fois après un petit délai (au cas où la hauteur aurait changé)
     setTimeout(() => {
       scrollRef.current?.scrollToEnd({ animated: false });
       hasInitialScrolled.current = true;
@@ -112,12 +100,9 @@ export default function MessageList({ messages, emptyText, agentId, onQuizAnswer
     }, 50);
   }, [lastMessageId]);
 
-  // Scroll auto sur nouveau message (si on est en bas et pas en train de scroller)
   useEffect(() => {
-    if (hasActiveQuiz) return;
     if (!lastMessageId) return;
     if (!hasInitialScrolled.current) return;
-
     if (lastMessageId === lastMessageIdRef.current) return;
 
     if (!isAtBottom.current || isUserScrolling.current) {
@@ -130,7 +115,7 @@ export default function MessageList({ messages, emptyText, agentId, onQuizAnswer
     setTimeout(() => {
       scrollRef.current?.scrollToEnd({ animated: true });
     }, 100);
-  }, [lastMessageId, hasActiveQuiz]);
+  }, [lastMessageId]);
 
   const handleScrollBeginDrag = () => {
     isUserScrolling.current = true;

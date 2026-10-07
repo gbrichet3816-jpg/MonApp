@@ -12,13 +12,15 @@ type Props = {
   onFilePicked?: (file: ImportedFile) => void;
   onPhotoTaken?: (photoUri: string, base64?: string) => void;
   disabled?: boolean;
-  /** Désactive complètement le micro (utile pendant un quiz) */
+  /** 🆕 Désactive complètement le micro (utile pendant un quiz) */
   micDisabled?: boolean;
   placeholder?: string;
   /** 🆕 Texte à pré-remplir (deep link, action externe) */
   prefillText?: string;
   /** 🆕 Callback appelé quand le pré-remplissage a été consommé */
   onPrefillConsumed?: () => void;
+  /** 🆕 Clé de reset : quand elle change, le champ est vidé */
+  resetKey?: string | number;
 };
 
 export default function InputBar({
@@ -30,6 +32,7 @@ export default function InputBar({
   placeholder = 'Écris un message...',
   prefillText,
   onPrefillConsumed,
+  resetKey,
 }: Props) {
   const [text, setText] = useState('');
   const [fileImporterVisible, setFileImporterVisible] = useState(false);
@@ -39,9 +42,17 @@ export default function InputBar({
       if (micDisabled) return;
       setText(transcript);
     },
+    // 🆕 On passe micDisabled au hook pour qu'il court-circuite complètement
+    disabled: micDisabled,
   });
 
-  // 🆕 Deep link : applique le texte pré-rempli
+  // Reset du champ quand resetKey change
+  useEffect(() => {
+    if (resetKey === undefined) return;
+    setText('');
+  }, [resetKey]);
+
+  // Deep link : applique le texte pré-rempli
   useEffect(() => {
     if (prefillText && prefillText.trim().length > 0) {
       setText(prefillText);
@@ -49,7 +60,7 @@ export default function InputBar({
     }
   }, [prefillText]);
 
-  // Bug #20 : si micDisabled devient true, on arrête immédiatement le micro
+  // Si micDisabled devient true, on arrête immédiatement le micro
   useEffect(() => {
     if (micDisabled && isListening) {
       try {

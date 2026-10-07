@@ -149,7 +149,19 @@ function hasActiveQuiz(messages: ChatMessage[]): boolean {
   return last?.isQuiz === true;
 }
 
-// 🆕 Construit le bilan d'activité côté MOBILE (pas de tool needed)
+// 🆕 Récupère toutes les questions de quiz déjà posées dans la conversation
+function getPastQuizQuestions(messages: ChatMessage[]): string[] {
+  const questions: string[] = [];
+  for (const m of messages) {
+    if (m.isQuiz && m.quizQuestions) {
+      for (const q of m.quizQuestions) {
+        questions.push(q.question);
+      }
+    }
+  }
+  return questions;
+}
+
 async function buildActivityReportText(userId: string, days: number): Promise<string> {
   const profDb = await openProfDatabase();
   const sinceDate = new Date();
@@ -300,7 +312,6 @@ export default function HomeScreen() {
         return () => clearTimeout(timer);
       }
       if (selectedAgentId === 'prof') {
-        // 🆕 Délai augmenté à 2500ms pour laisser SQLite s'ouvrir
         const timer = setTimeout(() => {
           if (isMounted.current) {
             checkReviewProposal();
@@ -637,9 +648,7 @@ export default function HomeScreen() {
       }
 
       if (call.name === 'getSchedule') {
-        console.log('📅 getSchedule | userId:', userId);
         const schedule = await getSchedule(profDb, userId);
-        console.log('📅 Résultat:', schedule.length, 'cours');
         if (schedule.length === 0) return 'Aucun emploi du temps enregistré.';
         const dayNames = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
         const lines: string[] = ['Emploi du temps :', ''];
@@ -854,7 +863,7 @@ export default function HomeScreen() {
       return 'Erreur lors de l\'exécution du tool.';
     }
   };
-  
+
   const selectedAgent = AGENTS.find((a) => a.id === selectedAgentId);
   const headerTitle = selectedAgent ? selectedAgent.name : 'Aucun agent';
 
@@ -880,13 +889,11 @@ export default function HomeScreen() {
     }
 
     setIsLoading(true);
-    console.log('🟡 isLoading mis à true');
 
     try {
       let systemPrompt = selectedAgent.systemPrompt;
       systemPrompt = `${systemPrompt}\n\n${getDateContext()}`;
 
-      // 🆕 BILAN : on appelle getActivityReport EN LOCAL et on injecte les données
       if (selectedAgent.id === 'prof' && isBilanRequest(text)) {
         try {
           const profDb = await openProfDatabase();
@@ -897,9 +904,7 @@ export default function HomeScreen() {
           let days = 30;
           if (lower.includes('semaine')) days = 7;
           else if (lower.includes('mois')) days = 30;
-          else if (lower.includes('toujours') || lower.includes('toujours')) days = 365;
-
-          console.log('📊 Bilan demandé — période :', days, 'jours');
+          else if (lower.includes('toujours')) days = 365;
 
           const reportText = await buildActivityReportText(userId, days);
           systemPrompt = `${systemPrompt}\n\n${reportText}`;
@@ -984,6 +989,20 @@ export default function HomeScreen() {
         }
       }
 
+      // 🆕 Injecter les questions déjà posées pour éviter la répétition
+      if (selectedAgent.id === 'prof') {
+        const lowerText = text.toLowerCase();
+                const wantsQuiz = /quiz|quizz|interroge|teste[- ]moi|questions sur|pose[- ]moi|nouveau\s+quiz|nouveau\s+quizz/.test(lowerText);
+        if (wantsQuiz) {
+          const pastQuestions = getPastQuizQuestions(messages);
+          if (pastQuestions.length > 0) {
+            const pastContext = `\n\n## ⚠️ QUESTIONS DÉJÀ POSÉES — À NE PAS REPOSER\n\nTu as déjà posé ces questions dans cette conversation. Génère des questions DIFFÉRENTES (autres dates, autres personnages, autres angles) :\n${pastQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`;
+            systemPrompt = `${systemPrompt}${pastContext}`;
+            console.log('📚 Questions passées injectées :', pastQuestions.length);
+          }
+        }
+      }
+
       const apiMessages: ApiMessage[] = newMessages.map((m) => ({
         role: m.isUser ? 'user' : 'assistant',
         content: m.text,
@@ -1043,6 +1062,7 @@ export default function HomeScreen() {
           }
 
           if (quizData) {
+            // 1) Module quiz
             const quizMessage: ChatMessage = {
               id: `agent-quiz-${Date.now()}`,
               text: '',
@@ -1053,14 +1073,19 @@ export default function HomeScreen() {
             };
             setMessages((prev) => [...prev, quizMessage]);
             saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
+
+            // 2) Message d'encouragement APRÈS le module (spacer pour centrer)
+            const encouragementMsg: ChatMessage = {
+              id: `agent-quiz-enc-${Date.now()}`,
+              text: `💪 À toi de jouer ! Prends ton temps, je suis là si tu as besoin d'un indice.`,
+              isUser: false,
+            };
+            setMessages((prev) => [...prev, encouragementMsg]);
+            saveMessage({ id: encouragementMsg.id, agentId: selectedAgent.id, text: encouragementMsg.text, isUser: false });
+
             messageAlreadyDisplayed = true;
           }
 
-          if (newResult.reply && newResult.reply.trim().length > 0) {
-            const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
-            setMessages((prev) => [...prev, finalMessage]);
-            saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
-          }
           currentResult = newResult;
           break;
         }
@@ -1156,7 +1181,6 @@ export default function HomeScreen() {
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
-      console.log('🔴 finally atteint');
       if (isMounted.current) setIsLoading(false);
     }
   };
@@ -1324,13 +1348,17 @@ export default function HomeScreen() {
             };
             setMessages((prev) => [...prev, quizMessage]);
             saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
+
+            const encouragementMsg: ChatMessage = {
+              id: `agent-quiz-enc-${Date.now()}`,
+              text: `💪 À toi de jouer ! Prends ton temps, je suis là si tu as besoin d'un indice.`,
+              isUser: false,
+            };
+            setMessages((prev) => [...prev, encouragementMsg]);
+            saveMessage({ id: encouragementMsg.id, agentId: selectedAgent.id, text: encouragementMsg.text, isUser: false });
+
             messageAlreadyDisplayed = true;
           } catch (e) { console.warn('[Prof] Parsing quiz:', e); }
-          if (newResult.reply && newResult.reply.trim().length > 0) {
-            const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
-            setMessages((prev) => [...prev, finalMessage]);
-            saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
-          }
           currentResult = newResult;
           break;
         }
@@ -1426,7 +1454,7 @@ export default function HomeScreen() {
     setFileModalVisible(false);
     setPendingFile(null);
   };
-  
+
   const handlePhotoTaken = (photoUri: string, base64?: string) => {
     setPendingPhoto({ uri: photoUri, base64 });
     setPhotoModalVisible(true);
@@ -1530,13 +1558,17 @@ export default function HomeScreen() {
             };
             setMessages((prev) => [...prev, quizMessage]);
             saveMessage({ id: quizMessage.id, agentId: selectedAgent.id, text: `[QUIZ] ${quizData.title}`, isUser: false });
+
+            const encouragementMsg: ChatMessage = {
+              id: `agent-quiz-enc-${Date.now()}`,
+              text: `💪 À toi de jouer ! Prends ton temps, je suis là si tu as besoin d'un indice.`,
+              isUser: false,
+            };
+            setMessages((prev) => [...prev, encouragementMsg]);
+            saveMessage({ id: encouragementMsg.id, agentId: selectedAgent.id, text: encouragementMsg.text, isUser: false });
+
             messageAlreadyDisplayed = true;
           } catch (e) { console.warn('[Prof] Parsing quiz:', e); }
-          if (newResult.reply && newResult.reply.trim().length > 0) {
-            const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
-            setMessages((prev) => [...prev, finalMessage]);
-            saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
-          }
           currentResult = newResult;
           break;
         }
@@ -1708,12 +1740,13 @@ export default function HomeScreen() {
       />
       <KeyboardAvoidingView style={styles.body} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <MessageList
-  messages={messages}
-  emptyText={emptyText}
-  agentId={selectedAgentId ?? undefined}
-  onQuizAnswer={handleQuizAnswer}
-  onRetry={handleRetry}
-/>
+          messages={messages}
+          emptyText={emptyText}
+          agentId={selectedAgentId ?? undefined}
+          onQuizAnswer={handleQuizAnswer}
+          onRetry={handleRetry}
+        />
+        {/* 🆕 InputBar toujours visible (sert à centrer le module quiz) */}
         <InputBar
           onSend={handleSend}
           onFilePicked={handleFilePicked}

@@ -108,6 +108,7 @@ export default function Message({
     onResult: (transcript) => {
       if (transcript && transcript.trim().length > 0) {
         transcriptRef.current = transcript;
+        setUserAnswer(transcript);
       }
     },
   });
@@ -117,11 +118,11 @@ export default function Message({
       isListeningRef.current = true;
     } else if (isListeningRef.current) {
       isListeningRef.current = false;
-      if (transcriptRef.current.trim()) {
+      if (transcriptRef.current.trim() && !userAnswer.trim()) {
         setUserAnswer(transcriptRef.current);
       }
     }
-  }, [isListening]);
+  }, [isListening, userAnswer]);
 
   const sentences = isDictation
     ? text
@@ -208,6 +209,10 @@ export default function Message({
 
   const handleMicStart = async () => {
     try {
+      // 🆕 On stoppe d'abord la lecture TTS en cours (sinon le micro capte la voix de l'agent)
+      stopSpeaking();
+      setIsPlaying(false);
+
       transcriptRef.current = '';
       setUserAnswer('');
       setShowMicMode(true);
@@ -302,13 +307,26 @@ export default function Message({
 
     const handleValidate = () => validateCurrentAnswer(userAnswer);
 
+    const handleManualSend = (value: string) => {
+      try { stop(); } catch {}
+      setUserAnswer(value);
+      setShowMicMode(false);
+      setTimeout(() => validateCurrentAnswer(value), 50);
+    };
+
     const handleMicSend = () => {
       try { stop(); } catch {}
       setShowMicMode(false);
-      const finalAnswer = transcriptRef.current || userAnswer;
-      if (finalAnswer.trim()) {
+      const finalAnswer = (transcriptRef.current || userAnswer || '').trim();
+      if (finalAnswer) {
         setUserAnswer(finalAnswer);
         setTimeout(() => validateCurrentAnswer(finalAnswer), 50);
+      } else {
+        Alert.alert(
+          'Rien détecté',
+          'Je n\'ai pas bien entendu. Tape ta réponse.',
+          [{ text: 'OK' }]
+        );
       }
     };
 
@@ -452,11 +470,44 @@ export default function Message({
                   {isListening ? 'Je t\'écoute…' : 'Enregistrement terminé'}
                 </Text>
               </View>
-              {userAnswer || transcriptRef.current ? (
-                <Text style={styles.quizMicTranscript}>« {userAnswer || transcriptRef.current} »</Text>
-              ) : (
-                <Text style={styles.quizMicHint}>{isListening ? 'Parle maintenant' : 'Aucune parole détectée'}</Text>
+
+              {/* 🆕 Message d'aide uniquement quand le champ est vide */}
+              {!userAnswer.trim() && !transcriptRef.current.trim() && (
+                <Text style={styles.quizMicHint}>
+                  {isListening
+                    ? 'Dis ta réponse, ou tape-la ci-dessous ⬇️'
+                    : 'Rien détecté. Tape ta réponse.'}
+                </Text>
               )}
+
+              {/* Champ texte visible en mode micro — affiche la transcription en temps réel */}
+              <View style={styles.quizInputContainer}>
+                <TextInput
+                  style={styles.quizInput}
+                  value={userAnswer}
+                  onChangeText={setUserAnswer}
+                  placeholder="Tape ta réponse…"
+                  placeholderTextColor={Colors.light.textSecondary}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="send"
+                  onSubmitEditing={() => {
+                    const v = userAnswer.trim();
+                    if (v) handleManualSend(v);
+                  }}
+                />
+                <TouchableOpacity
+                  style={[styles.quizValidateButton, !userAnswer.trim() && styles.quizValidateButtonDisabled]}
+                  onPress={() => {
+                    const v = userAnswer.trim();
+                    if (v) handleManualSend(v);
+                  }}
+                  disabled={!userAnswer.trim()}
+                >
+                  <Ionicons name="checkmark" size={20} color={Colors.light.background} />
+                </TouchableOpacity>
+              </View>
+
               <View style={styles.quizMicActions}>
                 <TouchableOpacity style={[styles.quizMicButton, styles.quizMicButtonCancel]} onPress={handleMicCancel}>
                   <Ionicons name="close" size={20} color={Colors.light.background} />
@@ -471,6 +522,10 @@ export default function Message({
                   <Text style={styles.quizMicButtonText}>Envoyer</Text>
                 </TouchableOpacity>
               </View>
+
+              <Text style={styles.quizMicTip}>
+                💡 Si ta réponse est une lettre ou un chiffre, dis « réponse... » ou « c'est... » pour bien être capté.
+              </Text>
             </View>
           ) : (
             <View style={styles.quizInputContainer}>
@@ -584,7 +639,7 @@ export default function Message({
   }
 
   // ============================================================
-  // MODE MESSAGE NORMAL (avec Markdown + bouton Relancer + visuel)
+  // MODE MESSAGE NORMAL
   // ============================================================
   const cleanedText = isUser ? text : cleanDsmlTags(text);
 
@@ -608,7 +663,6 @@ export default function Message({
     );
   }
 
-  // ✅ CORRECTIF BUG #9 : bloc visuel AVEC bouton TTS
   if (visual) {
     return (
       <View style={[styles.container, styles.agentContainer]}>
@@ -785,7 +839,7 @@ const styles = StyleSheet.create({
   quizQuestionRow: { flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.three, gap: Spacing.two },
   quizQuestion: { flex: 1, fontSize: 16, fontWeight: '600', fontFamily: Fonts.semibold, color: Colors.light.text, lineHeight: 22 },
   quizSpeakButton: { padding: Spacing.one },
-  quizInputContainer: { flexDirection: 'row', gap: Spacing.two, alignItems: 'center' },
+  quizInputContainer: { flexDirection: 'row', gap: Spacing.two, alignItems: 'center', marginTop: Spacing.two },
   quizInput: { flex: 1, backgroundColor: Colors.light.background, paddingVertical: Spacing.two, paddingHorizontal: Spacing.three, borderRadius: Spacing.two, fontSize: 16, fontFamily: Fonts.regular, color: Colors.light.text, borderWidth: 1, borderColor: '#A5D6A7' },
   quizMicIcon: { width: 44, height: 44, borderRadius: Spacing.two, backgroundColor: Colors.light.backgroundElement, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#A5D6A7' },
   quizValidateButton: { backgroundColor: '#2E7D32', width: 44, height: 44, borderRadius: Spacing.two, alignItems: 'center', justifyContent: 'center' },
@@ -813,9 +867,10 @@ const styles = StyleSheet.create({
   quizMicTextIdle: { color: Colors.light.textSecondary },
   quizMicTranscript: { fontSize: 16, fontFamily: Fonts.regular, color: Colors.light.text, fontStyle: 'italic', paddingVertical: Spacing.two, paddingHorizontal: Spacing.three, backgroundColor: Colors.light.background, borderRadius: Spacing.two, marginBottom: Spacing.two },
   quizMicHint: { fontSize: 14, fontFamily: Fonts.regular, color: Colors.light.textSecondary, fontStyle: 'italic', paddingVertical: Spacing.two, marginBottom: Spacing.two },
-  quizMicActions: { flexDirection: 'row', gap: Spacing.two },
+  quizMicActions: { flexDirection: 'row', gap: Spacing.two, marginTop: Spacing.two },
   quizMicButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.two, paddingVertical: Spacing.three, borderRadius: Spacing.two },
   quizMicButtonCancel: { backgroundColor: '#C62828' },
   quizMicButtonValidate: { backgroundColor: '#2E7D32' },
   quizMicButtonText: { fontSize: 15, fontWeight: '700', fontFamily: Fonts.bold, color: Colors.light.background },
+  quizMicTip: { fontSize: 12, fontFamily: Fonts.regular, color: Colors.light.textSecondary, fontStyle: 'italic', textAlign: 'center', marginTop: Spacing.two, lineHeight: 16, paddingHorizontal: Spacing.two },
 });
