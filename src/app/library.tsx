@@ -17,6 +17,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import DocumentViewer from '@/components/library/DocumentViewer';
 import FriendPicker from '@/components/network/FriendPicker';
 import {
+  saveMultipleAudios,
+  shareAudioFile,
+  shareMultipleAudios
+} from '@/config/audio';
+import {
   deleteDocument,
   Document,
   loadDocuments,
@@ -196,43 +201,83 @@ export default function LibraryScreen() {
     );
   };
 
+  // 🆕 Étape 4 : gère à la fois les écrits (PDF) et les audios (.m4a)
   const handleSaveSelected = async () => {
     if (selectedIds.length === 0) return;
 
-    const docs = getSelectedDocuments().map((d) => ({
-      title: d.title,
-      content: d.content,
-      agentId: d.agentId,
-    }));
-    const result = await saveMultiplePdfs(docs);
+    const selected = getSelectedDocuments();
+    const audios = selected.filter(
+      (d) => d.fileType?.startsWith('audio/') && d.filePath,
+    );
+    const others = selected.filter((d) => !d.fileType?.startsWith('audio/'));
 
-    if (result.failed === 0) {
-      Alert.alert('Enregistré !', `${result.success} document(s) enregistré(s).`);
+    let totalSuccess = 0;
+    let totalFailed = 0;
+
+    if (others.length > 0) {
+      const docs = others.map((d) => ({
+        title: d.title,
+        content: d.content,
+        agentId: d.agentId,
+      }));
+      const result = await saveMultiplePdfs(docs);
+      totalSuccess += result.success;
+      totalFailed += result.failed;
+    }
+
+    if (audios.length > 0) {
+      const result = await saveMultipleAudios(
+        audios.map((d) => ({ filePath: d.filePath!, title: d.title })),
+      );
+      totalSuccess += result.success;
+      totalFailed += result.failed;
+    }
+
+    if (totalFailed === 0) {
+      Alert.alert('Enregistré !', `${totalSuccess} document(s) enregistré(s).`);
     } else {
-      Alert.alert('Partiellement enregistré', `${result.success} réussi(s), ${result.failed} échoué(s).`);
+      Alert.alert(
+        'Partiellement enregistré',
+        `${totalSuccess} réussi(s), ${totalFailed} échoué(s).`,
+      );
     }
   };
 
+  // 🆕 Étape 4 : sépare écrits / audios pour le partage système
   const handleShareExternal = async () => {
     if (selectedIds.length === 0) return;
 
-    const docs = getSelectedDocuments().map((d) => ({
-      title: d.title,
-      content: d.content,
-      agentId: d.agentId,
-    }));
+    const selected = getSelectedDocuments();
+    const audios = selected.filter(
+      (d) => d.fileType?.startsWith('audio/') && d.filePath,
+    );
+    const others = selected.filter((d) => !d.fileType?.startsWith('audio/'));
 
-    if (docs.length > 1) {
-      Alert.alert(
-        'Partage multiple',
-        `${docs.length} documents vont être partagés un par un. Continue ?`,
-        [
-          { text: 'Annuler', style: 'cancel' },
-          { text: 'Continuer', onPress: () => shareMultiplePdfs(docs) },
-        ],
+    if (audios.length > 0) {
+      await shareMultipleAudios(
+        audios.map((d) => ({ filePath: d.filePath!, title: d.title })),
       );
-    } else {
-      await shareMultiplePdfs(docs);
+    }
+
+    if (others.length > 0) {
+      const docs = others.map((d) => ({
+        title: d.title,
+        content: d.content,
+        agentId: d.agentId,
+      }));
+
+      if (docs.length > 1) {
+        Alert.alert(
+          'Partage multiple',
+          `${docs.length} documents vont être partagés un par un. Continue ?`,
+          [
+            { text: 'Annuler', style: 'cancel' },
+            { text: 'Continuer', onPress: () => shareMultiplePdfs(docs) },
+          ],
+        );
+      } else {
+        await shareMultiplePdfs(docs);
+      }
     }
   };
 
@@ -312,7 +357,12 @@ export default function LibraryScreen() {
     );
   };
 
+  // 🆕 Étape 4 : bloque l'impression audio
   const handlePrint = async (doc: Document) => {
+    if (doc.fileType?.startsWith('audio/')) {
+      Alert.alert('Pas d\'impression', 'Un fichier audio ne peut pas être imprimé.');
+      return;
+    }
     const success = await printPdf({
       title: doc.title,
       content: doc.content,
@@ -321,7 +371,14 @@ export default function LibraryScreen() {
     if (!success) Alert.alert('Erreur', "Impossible d'imprimer.");
   };
 
+  // 🆕 Étape 4 : partage audio → menu système
   const handleShare = async (doc: Document) => {
+    if (doc.fileType?.startsWith('audio/') && doc.filePath) {
+      const success = await shareAudioFile(doc.filePath, doc.title);
+      if (!success) Alert.alert('Erreur', 'Impossible de partager l\'audio.');
+      return;
+    }
+
     const success = await sharePdf({
       title: doc.title,
       content: doc.content,
@@ -459,6 +516,8 @@ export default function LibraryScreen() {
 
   // ===== DÉTAIL D'UN DOCUMENT =====
   if (selectedDoc) {
+    const isAudio = selectedDoc.fileType?.startsWith('audio/') === true;
+
     return (
       <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
         <View style={styles.header}>
@@ -491,10 +550,12 @@ export default function LibraryScreen() {
             <Text style={styles.actionButtonText}>Amis</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.actionButton} onPress={() => handlePrint(selectedDoc)}>
-            <Ionicons name="print-outline" size={20} color={Colors.light.background} />
-            <Text style={styles.actionButtonText}>Impr.</Text>
-          </TouchableOpacity>
+          {!isAudio && (
+            <TouchableOpacity style={styles.actionButton} onPress={() => handlePrint(selectedDoc)}>
+              <Ionicons name="print-outline" size={20} color={Colors.light.background} />
+              <Text style={styles.actionButtonText}>Impr.</Text>
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity style={styles.actionButton} onPress={() => handleShare(selectedDoc)}>
             <Ionicons name="share-outline" size={20} color={Colors.light.background} />
