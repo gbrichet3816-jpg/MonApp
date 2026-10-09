@@ -109,8 +109,24 @@ export function saveMessage({
   );
 }
 
+/**
+ * 🆕 Met à jour le texte d'un message existant (par son id).
+ * Utile pour remplacer un placeholder "génération en cours" par le contenu final.
+ * Si le message n'existe pas, cette fonction ne fait rien.
+ */
+export function updateMessageText(id: string, newText: string) {
+  const database = getDb();
+  database.runSync(
+    'UPDATE messages SET text = ? WHERE id = ?',
+    [newText, id],
+  );
+}
+
 export function loadMessages(agentId: string) {
   const database = getDb();
+  // 🆕 On prend les 100 DERNIERS messages, puis on les remet dans l'ordre chronologique
+  // Avant : ORDER BY created_at ASC LIMIT 100 → prenait les 100 PLUS ANCIENS
+  // Maintenant : sous-requête DESC LIMIT 100 → prend les 100 PLUS RÉCENTS, puis ASC
   const rows = database.getAllSync<{
     id: string;
     agent_id: string;
@@ -118,7 +134,7 @@ export function loadMessages(agentId: string) {
     is_user: number;
     created_at: number;
   }>(
-    'SELECT * FROM messages WHERE agent_id = ? ORDER BY created_at ASC LIMIT 100',
+    'SELECT * FROM (SELECT * FROM messages WHERE agent_id = ? ORDER BY created_at DESC LIMIT 100) ORDER BY created_at ASC',
     [agentId],
   );
 
@@ -329,6 +345,74 @@ export function loadDocuments(): Document[] {
     file_type: string | null;
     created_at: number;
   }>('SELECT * FROM documents ORDER BY created_at DESC');
+
+  return rows.map((row) => ({
+    id: row.id,
+    agentId: row.agent_id,
+    title: row.title,
+    content: row.content,
+    filePath: row.file_path,
+    fileType: row.file_type,
+    createdAt: row.created_at,
+  }));
+}
+
+/**
+ * 🔍 Recherche dans les documents par titre, contenu ou agent.
+ *
+ * Insensible à la casse ET aux accents (grâce à un normalize côté JS).
+ * Retourne un tableau vide si la query est vide.
+ *
+ * @param query - Le texte à rechercher
+ * @param options - Filtres optionnels (agentId, fileType)
+ */
+export function searchDocuments(
+  query: string,
+  options?: {
+    agentId?: string;
+    fileType?: 'audio' | 'written' | 'all';
+  },
+): Document[] {
+  const trimmedQuery = query.trim().toLowerCase();
+  if (!trimmedQuery) return [];
+
+  const database = getDb();
+
+  // On construit la requête SQL dynamiquement selon les filtres
+  let sql = 'SELECT * FROM documents WHERE 1=1';
+  const params: any[] = [];
+
+  // Recherche texte : on utilise LIKE sur les 3 colonnes
+  // On normalise côté JS pour retirer les accents, mais SQLite LIKE est
+  // insensible à la casse par défaut pour les caractères ASCII.
+  const likePattern = `%${trimmedQuery}%`;
+  sql += ' AND (LOWER(title) LIKE ? OR LOWER(content) LIKE ? OR LOWER(agent_id) LIKE ?)';
+  params.push(likePattern, likePattern, likePattern);
+
+  // Filtre par agent
+  if (options?.agentId) {
+    sql += ' AND agent_id = ?';
+    params.push(options.agentId);
+  }
+
+  // Filtre par type de fichier
+  if (options?.fileType === 'audio') {
+    sql += " AND file_type LIKE 'audio/%'";
+  } else if (options?.fileType === 'written') {
+    sql += " AND (file_type IS NULL OR file_type NOT LIKE 'audio/%')";
+  }
+
+  sql += ' ORDER BY created_at DESC';
+
+  const rows = database.getAllSync<{
+    id: string;
+    agent_id: string;
+    title: string;
+    content: string;
+    file_path: string | null;
+    file_type: string | null;
+    created_at: number;
+  }>(sql, params);
 
   return rows.map((row) => ({
     id: row.id,

@@ -9,6 +9,7 @@ import {
   Image,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -26,6 +27,7 @@ import {
   Document,
   loadDocuments,
   saveDocument,
+  searchDocuments,
 } from '@/config/database';
 import { deleteFileFromDocuments } from '@/config/files';
 import {
@@ -55,6 +57,7 @@ type PendingDoc = {
 
 export default function LibraryScreen() {
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [filteredDocs, setFilteredDocs] = useState<Document[]>([]);
   const [pendingDocs, setPendingDocs] = useState<PendingDoc[]>([]);
   const [isLoadingPending, setIsLoadingPending] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
@@ -62,11 +65,35 @@ export default function LibraryScreen() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [friendPickerVisible, setFriendPickerVisible] = useState(false);
   const [activeTab, setActiveTab] = useState<'written' | 'audio'>('written');
+  // 🆕 Recherche
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchActive, setSearchActive] = useState(false);
 
   useEffect(() => {
     loadAll();
     loadPending();
   }, []);
+
+  // 🆕 Recalcule filteredDocs quand documents, query ou tab changent
+  useEffect(() => {
+    applySearchAndFilter();
+  }, [documents, searchQuery, activeTab]);
+
+  const applySearchAndFilter = () => {
+    // 1. Base : tous les docs OU résultats de recherche
+    let base: Document[];
+    if (searchQuery.trim().length > 0) {
+      // Recherche active : on cherche dans TOUS les docs (tous onglets confondus)
+      base = searchDocuments(searchQuery, {
+        fileType: activeTab === 'audio' ? 'audio' : 'written',
+      });
+    } else {
+      // Pas de recherche : on filtre juste par onglet
+      const isAudio = (d: Document) => d.fileType?.startsWith('audio/') === true;
+      base = documents.filter((d) => (activeTab === 'audio' ? isAudio(d) : !isAudio(d)));
+    }
+    setFilteredDocs(base);
+  };
 
   const loadAll = () => {
     const docs = loadDocuments();
@@ -201,7 +228,6 @@ export default function LibraryScreen() {
     );
   };
 
-  // 🆕 Étape 4 : gère à la fois les écrits (PDF) et les audios (.m4a)
   const handleSaveSelected = async () => {
     if (selectedIds.length === 0) return;
 
@@ -243,7 +269,6 @@ export default function LibraryScreen() {
     }
   };
 
-  // 🆕 Étape 4 : sépare écrits / audios pour le partage système
   const handleShareExternal = async () => {
     if (selectedIds.length === 0) return;
 
@@ -357,7 +382,6 @@ export default function LibraryScreen() {
     );
   };
 
-  // 🆕 Étape 4 : bloque l'impression audio
   const handlePrint = async (doc: Document) => {
     if (doc.fileType?.startsWith('audio/')) {
       Alert.alert('Pas d\'impression', 'Un fichier audio ne peut pas être imprimé.');
@@ -371,7 +395,6 @@ export default function LibraryScreen() {
     if (!success) Alert.alert('Erreur', "Impossible d'imprimer.");
   };
 
-  // 🆕 Étape 4 : partage audio → menu système
   const handleShare = async (doc: Document) => {
     if (doc.fileType?.startsWith('audio/') && doc.filePath) {
       const success = await shareAudioFile(doc.filePath, doc.title);
@@ -398,11 +421,10 @@ export default function LibraryScreen() {
     return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
   };
 
-  // 🆕 Filtrage Écrits / Audios
   const isAudioDoc = (doc: Document) => doc.fileType?.startsWith('audio/') === true;
   const writtenDocs = documents.filter((d) => !isAudioDoc(d));
   const audioDocs = documents.filter((d) => isAudioDoc(d));
-  const currentDocs = activeTab === 'written' ? writtenDocs : audioDocs;
+  const currentDocs = filteredDocs;
 
   // ===== MODE SÉLECTION =====
   if (selectionMode) {
@@ -593,6 +615,28 @@ export default function LibraryScreen() {
         )}
       </View>
 
+      {/* 🆕 Barre de recherche */}
+      {documents.length > 0 && (
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={20} color={Colors.light.textSecondary} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Rechercher un document…"
+            placeholderTextColor={Colors.light.textSecondary}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="search"
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={20} color={Colors.light.textSecondary} />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
       {/* 🆕 Onglets : Écrits / Audios */}
       <View style={styles.tabsBar}>
         <TouchableOpacity
@@ -607,7 +651,7 @@ export default function LibraryScreen() {
           <Text
             style={[styles.tabText, activeTab === 'written' && styles.tabTextActive]}
           >
-            Écrits ({writtenDocs.length})
+            Écrits ({searchQuery.trim() ? currentDocs.length : writtenDocs.length})
           </Text>
         </TouchableOpacity>
 
@@ -623,7 +667,7 @@ export default function LibraryScreen() {
           <Text
             style={[styles.tabText, activeTab === 'audio' && styles.tabTextActive]}
           >
-            Audios ({audioDocs.length})
+            Audios ({searchQuery.trim() ? currentDocs.length : audioDocs.length})
           </Text>
         </TouchableOpacity>
       </View>
@@ -678,18 +722,24 @@ export default function LibraryScreen() {
           </>
         }
         ListEmptyComponent={
-          pendingDocs.length === 0 && currentDocs.length === 0 ? (
+          pendingDocs.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Ionicons
-                name={activeTab === 'audio' ? 'mic-outline' : 'book-outline'}
+                name={searchQuery.trim() ? 'search-outline' : (activeTab === 'audio' ? 'mic-outline' : 'book-outline')}
                 size={64}
                 color={Colors.light.textSecondary}
               />
               <Text style={styles.emptyTitle}>
-                {activeTab === 'audio' ? 'Aucun audio' : 'Bibliothèque vide'}
+                {searchQuery.trim()
+                  ? 'Aucun résultat'
+                  : activeTab === 'audio'
+                  ? 'Aucun audio'
+                  : 'Bibliothèque vide'}
               </Text>
               <Text style={styles.emptyText}>
-                {activeTab === 'audio'
+                {searchQuery.trim()
+                  ? `Aucun document ne correspond à "${searchQuery}".`
+                  : activeTab === 'audio'
                   ? 'Tes enregistrements audio apparaîtront ici.'
                   : 'Les documents créés par tes agents apparaîtront ici.'}
               </Text>
@@ -753,6 +803,27 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.light.text,
     textAlign: 'center',
+  },
+  // 🆕 Barre de recherche
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginHorizontal: Spacing.three,
+    marginTop: Spacing.three,
+    marginBottom: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    backgroundColor: Colors.light.backgroundElement,
+    borderRadius: Spacing.two,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: Colors.light.text,
+    paddingVertical: 0,
   },
   docMetaBar: {
     paddingHorizontal: Spacing.four,

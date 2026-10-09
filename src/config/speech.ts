@@ -248,7 +248,7 @@ async function speakBlocks(
 
 /**
  * Lit un texte à voix haute NORMALEMENT (chat classique).
- * Vitesse : 1.1 (légèrement plus rapide que 1.0 pour un rendu plus naturel).
+ * Vitesse : 1.05 (naturel, légèrement plus rapide que 1.0).
  */
 export function speakText(text: string, onDone?: () => void) {
   ttsStop();
@@ -263,7 +263,7 @@ export function speakText(text: string, onDone?: () => void) {
 
   if (cleanText.length <= 3500) {
     // Lecture d'un seul bloc
-    ttsSpeak(cleanText, 1.1, {
+    ttsSpeak(cleanText, 1.05, {
       onDone: () => {
         isSpeaking = false;
         onDone?.();
@@ -279,13 +279,14 @@ export function speakText(text: string, onDone?: () => void) {
   } else {
     // Texte très long → découpage par blocs
     const blocks = splitIntoBlocks(cleanText);
-    speakBlocks(blocks, 1.1, onDone);
+    speakBlocks(blocks, 1.05, onDone);
   }
 }
 
 /**
  * Lit un texte LENTEMENT pour une dictée.
  * Vitesse : 0.6 (lente, adaptée pour écrire).
+ * ⚠️ NE PAS MODIFIER cette vitesse — elle est calibrée pour la dictée.
  */
 export function speakTextSlow(text: string, onDone?: () => void) {
   ttsStop();

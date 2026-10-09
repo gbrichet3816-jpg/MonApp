@@ -3,14 +3,15 @@
 
 import * as SQLite from 'expo-sqlite';
 import {
-    cacheWeather,
-    getCachedWeather,
+  cacheWeather,
+  getCachedWeather,
 } from './database';
 
 const API_BASE_URL = 'https://monapp-server-production.up.railway.app';
 
 /**
  * Structure des données météo renvoyées par le serveur.
+ * 🆕 Contient maintenant les prévisions sur 3 jours.
  */
 export interface WeatherData {
   city: string;
@@ -22,12 +23,20 @@ export interface WeatherData {
     humidity: number;
     wind_speed: number;
   };
-  forecast: {
+  // 🆕 4 jours de prévisions (aujourd'hui + 3)
+  forecast: Array<{
+    date: string;
+    label: string;
+    dayOfWeek: string;
+    dayOfMonth: number;
+    month: string;
+    min: number;
+    max: number;
     morning: { temp: number; description: string };
     afternoon: { temp: number; description: string };
     evening: { temp: number; description: string };
-  };
-  advice: string; // Conseil adapté (pull, parapluie, lunettes…)
+  }>;
+  advice: string;
 }
 
 /**
@@ -93,26 +102,39 @@ export async function fetchWeather(
 }
 
 /**
- * Formate les données météo pour injection dans le prompt de Prof.
+ * Formate les données météo (3 jours) pour injection dans le prompt de Prof.
  */
 export function formatWeatherForPrompt(data: WeatherData): string {
   const lines: string[] = [
-    '## DONNÉES MÉTÉO',
+    '## DONNÉES MÉTÉO (3 JOURS)',
     '',
     `Ville : ${data.city}`,
     '',
     `**Maintenant** : ${data.current.temp}°C (ressenti ${data.current.feels_like}°C), ${data.current.description}`,
-    `**Matin** : ${data.forecast.morning.temp}°C, ${data.forecast.morning.description}`,
-    `**Après-midi** : ${data.forecast.afternoon.temp}°C, ${data.forecast.afternoon.description}`,
-    `**Soir** : ${data.forecast.evening.temp}°C, ${data.forecast.evening.description}`,
     '',
-    `**Vent** : ${data.current.wind_speed} km/h`,
-    `**Humidité** : ${data.current.humidity}%`,
-    '',
-    `💡 **Conseil à donner** : ${data.advice}`,
-    '',
-    'Donne un résumé détaillé et chaleureux (3-4 phrases fluides), PAS de liste.',
+    '**PRÉVISIONS :**',
   ];
+
+  // Afficher chaque jour disponible
+  for (const day of data.forecast) {
+    const dateLabel = `${day.label} (${day.dayOfWeek} ${day.dayOfMonth} ${day.month})`;
+    lines.push('');
+    lines.push(`### ${dateLabel}`);
+    lines.push(`- Matin : ${day.morning.temp}°C, ${day.morning.description}`);
+    lines.push(`- Après-midi : ${day.afternoon.temp}°C, ${day.afternoon.description}`);
+    lines.push(`- Soir : ${day.evening.temp}°C, ${day.evening.description}`);
+    lines.push(`- Min/Max : ${day.min}°C / ${day.max}°C`);
+  }
+
+  lines.push('');
+  lines.push(`**Vent** : ${data.current.wind_speed} km/h`);
+  lines.push(`**Humidité** : ${data.current.humidity}%`);
+  lines.push('');
+  lines.push(`💡 **Conseil à donner** : ${data.advice}`);
+  lines.push('');
+  lines.push('IMPORTANT : tu as accès aux prévisions sur 3 JOURS (aujourd\'hui, demain, après-demain).');
+  lines.push('Si l\'enfant demande la météo de demain ou d\'un autre jour, utilise ces données.');
+  lines.push('Donne un résumé détaillé et chaleureux (3-5 phrases fluides), PAS de liste brute.');
 
   return lines.join('\n');
 }

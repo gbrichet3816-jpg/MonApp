@@ -75,6 +75,7 @@ import FileMessageModal from '@/components/chat/FileMessageModal';
 import InputBar from '@/components/chat/InputBar';
 import MessageList, { ChatMessage } from '@/components/chat/MessageList';
 import PhotoMessageModal, { PhotoAction } from '@/components/chat/PhotoMessageModal';
+import PodcastMessageModal from '@/components/chat/PodcastMessageModal';
 import AgentMenu from '@/components/common/AgentMenu';
 import Header from '@/components/common/Header';
 import Onboarding from '@/components/common/Onboarding';
@@ -100,11 +101,14 @@ import {
   savePreference,
   saveReminder,
   setReminderResponse,
+  updateMessageText,
 } from '@/config/database';
 import { saveFileToDocuments } from '@/config/files';
 import { requestNotificationPermission } from '@/config/notifications';
 import { getLocalProfile } from '@/config/user';
 import { Colors } from '@/constants/theme';
+import { useMemory } from '@/hooks/useMemory';
+import { usePodcastGenerator } from '@/hooks/usePodcastGenerator';
 import type { VisualData } from '@/utils/visualParser';
 
 // ============================================================
@@ -252,8 +256,17 @@ export default function HomeScreen() {
   // 🆕 Audio V1
   const [pendingAudio, setPendingAudio] = useState<{ uri: string; durationMs: number } | null>(null);
   const [audioModalVisible, setAudioModalVisible] = useState(false);
+  // 🆕 Podcast M4A
+  const [podcastModalVisible, setPodcastModalVisible] = useState(false);
+  const [pendingPodcastTitle, setPendingPodcastTitle] = useState<string>('');
   const [prefillText, setPrefillText] = useState('');
   const isMounted = useRef(true);
+
+  // 🆕 Hook Podcast
+  const podcastGenerator = usePodcastGenerator();
+
+  // 🧠 Hook Mémoire longue
+  const memory = useMemory();
 
   useEffect(() => {
     isMounted.current = true;
@@ -308,6 +321,7 @@ export default function HomeScreen() {
   useEffect(() => {
     if (selectedAgentId) {
       const saved = loadMessages(selectedAgentId);
+      console.log('📂 [DB] Messages chargés:', saved.length, 'messages pour agent:', selectedAgentId);
       setMessages(saved);
 
       if (selectedAgentId === 'sante') {
@@ -620,6 +634,15 @@ export default function HomeScreen() {
         return `Fiche enregistrée : ${title}`;
       }
 
+      // 🆕 PODCAST — Retourne un marqueur, c'est handleSend qui gère la génération
+      if (call.name === 'createPodcast') {
+        const title = (args.title || 'Podcast').substring(0, 60);
+        const transcript = args.transcript || '';
+        if (!transcript) return 'Aucun script fourni.';
+
+        return `__PODCAST__:${JSON.stringify({ title, transcript })}`;
+      }
+
       if (call.name === 'listGrades') {
         const events = await getEventsWithGrades(profDb, userId);
         if (events.length === 0) {
@@ -897,6 +920,21 @@ export default function HomeScreen() {
       let systemPrompt = selectedAgent.systemPrompt;
       systemPrompt = `${systemPrompt}\n\n${getDateContext()}`;
 
+      // 🧠 MÉMOIRE LONGUE — Injection du contexte mémoire (Prof uniquement)
+      if (selectedAgent.id === 'prof') {
+        try {
+          const profile = getLocalProfile();
+          const userId = profile?.code ?? 'default';
+          const memoryContext = await memory.loadContext(userId);
+          if (memoryContext.context && memoryContext.context.trim().length > 0) {
+            systemPrompt = `${systemPrompt}\n\n${memoryContext.context}`;
+            console.log('🧠 [Mémoire] Contexte injecté:', memoryContext.summaries, 'résumés,', memoryContext.patterns, 'patterns');
+          }
+        } catch (e) {
+          console.warn('[Prof] Erreur injection mémoire:', e);
+        }
+      }
+
       if (selectedAgent.id === 'prof' && isBilanRequest(text)) {
         try {
           const profDb = await openProfDatabase();
@@ -1137,6 +1175,85 @@ export default function HomeScreen() {
           break;
         }
 
+        // 🆕 PODCAST — Sauvegarde immédiate d'un placeholder + mise à jour à la fin
+        const podcastResult = findToolResult(allToolResults, '__PODCAST__:');
+        if (podcastResult) {
+          const jsonStr = podcastResult.replace('__PODCAST__:', '');
+          let podcastData: { title: string; transcript: string } | null = null;
+          try {
+            podcastData = JSON.parse(jsonStr);
+          } catch (e) {
+            console.warn('[Prof] Erreur parsing podcast:', e);
+          }
+
+          if (podcastData) {
+            const { title, transcript } = podcastData;
+
+            // 📌 Sauvegarde IMMÉDIATE du message placeholder
+            const podcastMsgId = `agent-podcast-${Date.now()}`;
+            const placeholderText = `🎙️ Génération du podcast "${title}" en cours…`;
+            const placeholderMessage: ChatMessage = {
+              id: podcastMsgId,
+              text: placeholderText,
+              isUser: false,
+            };
+            setMessages((prev) => [...prev, placeholderMessage]);
+            saveMessage({
+              id: podcastMsgId,
+              agentId: selectedAgent.id,
+              text: placeholderText,
+              isUser: false,
+            });
+
+            // Ouvre le modal de génération
+            setPendingPodcastTitle(title);
+            setPodcastModalVisible(true);
+
+            // Lance la génération (async)
+            podcastGenerator.generate(transcript, title).then((result) => {
+              // Fermer le modal
+              setPodcastModalVisible(false);
+
+              if (!result.success) {
+                console.warn('[Podcast] Échec:', result.error);
+                const errorText = `😕 Je n'ai pas réussi à générer le podcast "${title}". Réessaie dans un instant.`;
+                // Mise à jour du message placeholder avec le texte d'erreur
+                updateMessageText(podcastMsgId, errorText);
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === podcastMsgId ? { ...m, text: errorText, isError: true } : m
+                  )
+                );
+                return;
+              }
+
+              // ✅ Sauvegarde du fichier dans la bibliothèque
+              const docId = `doc-podcast-${Date.now()}`;
+              saveDocument({
+                id: docId,
+                agentId: selectedAgent.id,
+                title,
+                content: '',
+                filePath: result.filePath || undefined,
+                fileType: 'audio/m4a',
+              });
+
+              // ✅ Mise à jour du message placeholder avec le texte final
+              const finalText = `🎙️ Ton podcast "${title}" est prêt !\n\n📚 Tu le retrouveras dans ta bibliothèque, onglet Audios. Tu peux l'écouter autant de fois que tu veux.`;
+              updateMessageText(podcastMsgId, finalText);
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === podcastMsgId ? { ...m, text: finalText } : m
+                )
+              );
+            });
+
+            messageAlreadyDisplayed = true;
+          }
+          currentResult = newResult;
+          break;
+        }
+
         if (newResult.reply && newResult.reply.trim().length > 0) {
           const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
@@ -1169,6 +1286,20 @@ export default function HomeScreen() {
           setMessages((prev) => [...prev, agentMessage]);
           saveMessage({ id: agentMessage.id, agentId: selectedAgent.id, text: agentMessage.text, isUser: false });
         }
+      }
+
+      // 🧠 MÉMOIRE LONGUE — Déclenchement asynchrone (non bloquant)
+      if (selectedAgent.id === 'prof') {
+        const profile = getLocalProfile();
+        const userId = profile?.code ?? 'default';
+        // Résumé de conversation (30 messages ou 24h)
+        memory.maybeGenerateSummary(userId).catch((e) => {
+          console.warn('[Mémoire] Erreur génération résumé:', e);
+        });
+        // Extraction des patterns (tous les 15 messages)
+        memory.maybeExtractPatterns(userId).catch((e) => {
+          console.warn('[Mémoire] Erreur extraction patterns:', e);
+        });
       }
     } catch (error) {
       if (!isMounted.current) return;
@@ -1403,6 +1534,71 @@ export default function HomeScreen() {
           break;
         }
 
+        // 🆕 PODCAST
+        const podcastResult = findToolResult(allToolResults, '__PODCAST__:');
+        if (podcastResult) {
+          const jsonStr = podcastResult.replace('__PODCAST__:', '');
+          try {
+            const podcastData = JSON.parse(jsonStr);
+            const { title, transcript } = podcastData;
+
+            const podcastMsgId = `agent-podcast-${Date.now()}`;
+            const placeholderText = `🎙️ Génération du podcast "${title}" en cours…`;
+            const placeholderMessage: ChatMessage = {
+              id: podcastMsgId,
+              text: placeholderText,
+              isUser: false,
+            };
+            setMessages((prev) => [...prev, placeholderMessage]);
+            saveMessage({
+              id: podcastMsgId,
+              agentId: selectedAgent.id,
+              text: placeholderText,
+              isUser: false,
+            });
+
+            setPendingPodcastTitle(title);
+            setPodcastModalVisible(true);
+
+            podcastGenerator.generate(transcript, title).then((result) => {
+              setPodcastModalVisible(false);
+
+              if (!result.success) {
+                const errorText = `😕 Je n'ai pas réussi à générer le podcast "${title}". Réessaie dans un instant.`;
+                updateMessageText(podcastMsgId, errorText);
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === podcastMsgId ? { ...m, text: errorText, isError: true } : m
+                  )
+                );
+                return;
+              }
+
+              const docId = `doc-podcast-${Date.now()}`;
+              saveDocument({
+                id: docId,
+                agentId: selectedAgent.id,
+                title,
+                content: '',
+                filePath: result.filePath || undefined,
+                fileType: 'audio/m4a',
+              });
+
+              const finalText = `🎙️ Ton podcast "${title}" est prêt !\n\n📚 Tu le retrouveras dans ta bibliothèque, onglet Audios. Tu peux l'écouter autant de fois que tu veux.`;
+              updateMessageText(podcastMsgId, finalText);
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === podcastMsgId ? { ...m, text: finalText } : m
+                )
+              );
+            });
+
+            messageAlreadyDisplayed = true;
+          } catch (e) { console.warn('[Prof] Parsing podcast:', e); }
+          currentResult = newResult;
+          break;
+        }
+
         if (newResult.reply && newResult.reply.trim().length > 0) {
           const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
@@ -1613,6 +1809,71 @@ export default function HomeScreen() {
           break;
         }
 
+        // 🆕 PODCAST
+        const podcastResult = findToolResult(allToolResults, '__PODCAST__:');
+        if (podcastResult) {
+          const jsonStr = podcastResult.replace('__PODCAST__:', '');
+          try {
+            const podcastData = JSON.parse(jsonStr);
+            const { title, transcript } = podcastData;
+
+            const podcastMsgId = `agent-podcast-${Date.now()}`;
+            const placeholderText = `🎙️ Génération du podcast "${title}" en cours…`;
+            const placeholderMessage: ChatMessage = {
+              id: podcastMsgId,
+              text: placeholderText,
+              isUser: false,
+            };
+            setMessages((prev) => [...prev, placeholderMessage]);
+            saveMessage({
+              id: podcastMsgId,
+              agentId: selectedAgent.id,
+              text: placeholderText,
+              isUser: false,
+            });
+
+            setPendingPodcastTitle(title);
+            setPodcastModalVisible(true);
+
+            podcastGenerator.generate(transcript, title).then((result) => {
+              setPodcastModalVisible(false);
+
+              if (!result.success) {
+                const errorText = `😕 Je n'ai pas réussi à générer le podcast "${title}". Réessaie dans un instant.`;
+                updateMessageText(podcastMsgId, errorText);
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === podcastMsgId ? { ...m, text: errorText, isError: true } : m
+                  )
+                );
+                return;
+              }
+
+              const docId = `doc-podcast-${Date.now()}`;
+              saveDocument({
+                id: docId,
+                agentId: selectedAgent.id,
+                title,
+                content: '',
+                filePath: result.filePath || undefined,
+                fileType: 'audio/m4a',
+              });
+
+              const finalText = `🎙️ Ton podcast "${title}" est prêt !\n\n📚 Tu le retrouveras dans ta bibliothèque, onglet Audios. Tu peux l'écouter autant de fois que tu veux.`;
+              updateMessageText(podcastMsgId, finalText);
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === podcastMsgId ? { ...m, text: finalText } : m
+                )
+              );
+            });
+
+            messageAlreadyDisplayed = true;
+          } catch (e) { console.warn('[Prof] Parsing podcast:', e); }
+          currentResult = newResult;
+          break;
+        }
+
         if (newResult.reply && newResult.reply.trim().length > 0) {
           const finalMessage: ChatMessage = { id: `agent-${Date.now()}`, text: newResult.reply, isUser: false };
           setMessages((prev) => [...prev, finalMessage]);
@@ -1774,6 +2035,16 @@ export default function HomeScreen() {
     setPendingAudio(null);
   };
 
+  // ============================================================
+  // 🎙️ PODCAST M4A — cancel uniquement
+  // ============================================================
+
+  const handlePodcastCancel = async () => {
+    setPodcastModalVisible(false);
+    await podcastGenerator.cleanup();
+    setPendingPodcastTitle('');
+  };
+
   const handleQuizAnswer = async (
     messageId: string,
     questionIndex: number,
@@ -1892,6 +2163,12 @@ export default function HomeScreen() {
         audioDurationMs={pendingAudio?.durationMs || 0}
         onSend={handleAudioSend}
         onCancel={handleAudioCancel}
+      />
+      <PodcastMessageModal
+        visible={podcastModalVisible}
+        title={pendingPodcastTitle}
+        progress={podcastGenerator.state.progress}
+        onCancel={handlePodcastCancel}
       />
     </SafeAreaView>
   );

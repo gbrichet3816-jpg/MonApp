@@ -154,6 +154,38 @@ function initProfTables(db: SQLite.SQLiteDatabase): void {
     );
   `);
 
+  // 🆕 7. Mémoire longue : résumés de conversations
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS prof_summaries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      messages_count INTEGER NOT NULL,
+      period_start INTEGER NOT NULL,
+      period_end INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_prof_summaries_user
+      ON prof_summaries(user_id, created_at DESC);
+  `);
+
+  // 🆕 8. Mémoire longue : comportements/méthodes apprises
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS prof_learned_patterns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      category TEXT NOT NULL,
+      pattern TEXT NOT NULL,
+      confidence INTEGER DEFAULT 1,
+      times_observed INTEGER DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(user_id, category, pattern)
+    );
+    CREATE INDEX IF NOT EXISTS idx_prof_patterns_user
+      ON prof_learned_patterns(user_id, confidence DESC);
+  `);
+
   // Migrations
   const migrations = [
     `ALTER TABLE prof_profile ADD COLUMN weather_city TEXT;`,
@@ -729,4 +761,225 @@ export async function markWeatherRefusalPrompted(db: SQLite.SQLiteDatabase, user
      ON CONFLICT(user_id) DO UPDATE SET last_weather_refusal_prompt_at = excluded.last_weather_refusal_prompt_at, updated_at = excluded.updated_at`,
     [userId, now, now]
   );
+}
+
+// ============================================================
+// 🆕 MÉMOIRE LONGUE — RÉSUMÉS DE CONVERSATIONS
+// ============================================================
+
+export interface ProfSummary {
+  id?: number;
+  user_id: string;
+  summary: string;
+  messages_count: number;
+  period_start: number;
+  period_end: number;
+  created_at: number;
+}
+
+export async function saveSummary(
+  db: SQLite.SQLiteDatabase,
+  userId: string,
+  summary: string,
+  messagesCount: number,
+  periodStart: number,
+  periodEnd: number
+): Promise<void> {
+  db.runSync(
+    `INSERT INTO prof_summaries (user_id, summary, messages_count, period_start, period_end, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [userId, summary, messagesCount, periodStart, periodEnd, Date.now()]
+  );
+}
+
+export async function getRecentSummaries(
+  db: SQLite.SQLiteDatabase,
+  userId: string,
+  limit: number = 3
+): Promise<ProfSummary[]> {
+  return db.getAllSync<ProfSummary>(
+    `SELECT * FROM prof_summaries WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`,
+    [userId, limit]
+  );
+}
+
+export async function countSummaries(
+  db: SQLite.SQLiteDatabase,
+  userId: string
+): Promise<number> {
+  const row = db.getFirstSync<{ count: number }>(
+    `SELECT COUNT(*) as count FROM prof_summaries WHERE user_id = ?`,
+    [userId]
+  );
+  return row?.count ?? 0;
+}
+
+/**
+ * Détecte si on doit générer un nouveau résumé.
+ * Déclenchement : tous les 30 messages OU toutes les 24h.
+ */
+export async function shouldGenerateSummary(
+  db: SQLite.SQLiteDatabase,
+  userId: string
+): Promise<boolean> {
+  try {
+    const lastSummary = db.getFirstSync<{ period_end: number; messages_count: number }>(
+      `SELECT period_end, messages_count FROM prof_summaries WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`,
+      [userId]
+    );
+
+    // Compter les messages depuis le dernier résumé
+    const since = lastSummary ? lastSummary.period_end : 0;
+    const countRow = db.getFirstSync<{ count: number }>(
+      `SELECT COUNT(*) as count FROM prof_messages WHERE user_id = ? AND created_at > ?`,
+      [userId, since]
+    );
+    const messageCount = countRow?.count ?? 0;
+
+    // Déclencheur 1 : 30 messages ou plus depuis le dernier résumé
+    if (messageCount >= 30) return true;
+
+    // Déclencheur 2 : 24h depuis le dernier résumé (avec au moins 10 messages)
+    if (lastSummary) {
+      const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
+      if (lastSummary.period_end < twentyFourHoursAgo && messageCount >= 10) return true;
+    }
+
+    return false;
+  } catch (e) {
+    console.warn('[Prof DB] shouldGenerateSummary échoué:', e);
+    return false;
+  }
+}
+
+/**
+ * Récupère les messages à résumer (depuis le dernier résumé).
+ */
+export async function getMessagesToSummarize(
+  db: SQLite.SQLiteDatabase,
+  userId: string
+): Promise<ProfMessage[]> {
+  const lastSummary = db.getFirstSync<{ period_end: number }>(
+    `SELECT period_end FROM prof_summaries WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`,
+    [userId]
+  );
+
+  const since = lastSummary ? lastSummary.period_end : 0;
+
+  return db.getAllSync<ProfMessage>(
+    `SELECT * FROM prof_messages WHERE user_id = ? AND created_at > ? ORDER BY created_at ASC LIMIT 50`,
+    [userId, since]
+  );
+}
+
+// ============================================================
+// 🆕 MÉMOIRE LONGUE — COMPORTEMENTS APPRIS
+// ============================================================
+
+export interface ProfLearnedPattern {
+  id?: number;
+  user_id: string;
+  category: string;
+  pattern: string;
+  confidence: number;
+  times_observed: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export async function saveLearnedPattern(
+  db: SQLite.SQLiteDatabase,
+  userId: string,
+  category: string,
+  pattern: string
+): Promise<void> {
+  const now = Date.now();
+
+  const existing = db.getFirstSync<ProfLearnedPattern>(
+    `SELECT * FROM prof_learned_patterns WHERE user_id = ? AND category = ? AND pattern = ?`,
+    [userId, category, pattern]
+  );
+
+  if (existing && existing.id !== undefined) {
+    // Incrémenter la confiance et le nombre d'observations
+    db.runSync(
+      `UPDATE prof_learned_patterns
+       SET confidence = MIN(confidence + 1, 5),
+           times_observed = times_observed + 1,
+           updated_at = ?
+       WHERE id = ?`,
+      [now, existing.id]
+    );
+  } else {
+    db.runSync(
+      `INSERT INTO prof_learned_patterns (user_id, category, pattern, confidence, times_observed, created_at, updated_at)
+       VALUES (?, ?, ?, 1, 1, ?, ?)`,
+      [userId, category, pattern, now, now]
+    );
+  }
+}
+
+export async function getLearnedPatterns(
+  db: SQLite.SQLiteDatabase,
+  userId: string,
+  limit: number = 5
+): Promise<ProfLearnedPattern[]> {
+  return db.getAllSync<ProfLearnedPattern>(
+    `SELECT * FROM prof_learned_patterns
+     WHERE user_id = ?
+     ORDER BY confidence DESC, times_observed DESC
+     LIMIT ?`,
+    [userId, limit]
+  );
+}
+
+// ============================================================
+// 🆕 MÉMOIRE LONGUE — CONSTRUCTION DU CONTEXTE
+// ============================================================
+
+/**
+ * Construit le contexte mémoire à injecter dans le prompt Prof.
+ * Format compact (~400 tokens max).
+ */
+export async function buildMemoryContext(
+  db: SQLite.SQLiteDatabase,
+  userId: string
+): Promise<string> {
+  try {
+    const parts: string[] = [];
+
+    // 1. Profil de l'enfant (déjà utilisé ailleurs, mais on le rappelle)
+    const profile = await getProfProfile(db, userId);
+    if (profile && profile.child_name && profile.child_name !== 'Enfant') {
+      parts.push(`**Profil** : ${profile.child_name}, ${profile.child_age} ans, en ${profile.child_grade}.`);
+    }
+
+    // 2. Notions récentes à revoir
+    const topicsToReview = await getTopicsToReview(db, userId);
+    if (topicsToReview.length > 0) {
+      const lines = topicsToReview.map((t) => `- ${t.subject} : ${t.topic} (${t.status})`);
+      parts.push(`**À revoir** :\n${lines.join('\n')}`);
+    }
+
+    // 3. Derniers résumés de conversation
+    const summaries = await getRecentSummaries(db, userId, 3);
+    if (summaries.length > 0) {
+      const lines = summaries.map((s) => `- ${s.summary}`);
+      parts.push(`**Historique récent** :\n${lines.join('\n')}`);
+    }
+
+    // 4. Comportements appris
+    const patterns = await getLearnedPatterns(db, userId, 5);
+    if (patterns.length > 0) {
+      const lines = patterns.map((p) => `- [${p.category}] ${p.pattern}`);
+      parts.push(`**Ce que tu as appris sur lui** :\n${lines.join('\n')}`);
+    }
+
+    if (parts.length === 0) return '';
+
+    return `## 🧠 MÉMOIRE LONGUE (ce que tu sais déjà sur cet enfant)\n\n${parts.join('\n\n')}\n`;
+  } catch (e) {
+    console.warn('[Prof DB] buildMemoryContext échoué:', e);
+    return '';
+  }
 }
