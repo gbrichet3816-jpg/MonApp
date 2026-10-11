@@ -1,3 +1,6 @@
+// src/config/notifications.ts
+// Configuration des notifications (permissions, listeners, planification)
+
 import { Platform } from 'react-native';
 
 let Notifications: any = null;
@@ -97,4 +100,97 @@ export async function getAllScheduledNotifications() {
 export async function cancelAllNotifications() {
   if (!notificationsAvailable) return;
   await Notifications.cancelAllScheduledNotificationsAsync();
+}
+
+// ============================================================
+// 🆕 LISTENERS POUR LES BRIEFINGS
+// ============================================================
+
+/**
+ * Callback appelé quand une notification est TAPÉE par l'utilisateur.
+ * Reçoit les données `data` de la notification.
+ */
+export type NotificationTapCallback = (data: Record<string, any>) => void;
+
+/**
+ * Callback appelé quand une notification est REÇUE en foreground
+ * (app ouverte au moment où la notif arrive).
+ */
+export type NotificationReceivedCallback = (data: Record<string, any>) => void;
+
+/**
+ * Ajoute un listener pour les notifications TAPÉES.
+ * Retourne une fonction pour retirer le listener.
+ */
+export function addNotificationTapListener(
+  callback: NotificationTapCallback
+): () => void {
+  if (!notificationsAvailable) return () => {};
+
+  const sub = Notifications.addNotificationResponseReceivedListener(
+    (response: any) => {
+      try {
+        const data = response?.notification?.request?.content?.data || {};
+        callback(data);
+      } catch (e) {
+        console.warn('[Notifications] Erreur listener tap:', e);
+      }
+    }
+  );
+
+  return () => sub.remove();
+}
+
+/**
+ * Ajoute un listener pour les notifications REÇUES en foreground.
+ * Retourne une fonction pour retirer le listener.
+ */
+export function addNotificationReceivedListener(
+  callback: NotificationReceivedCallback
+): () => void {
+  if (!notificationsAvailable) return () => {};
+
+  const sub = Notifications.addNotificationReceivedListener(
+    (notification: any) => {
+      try {
+        const data = notification?.request?.content?.data || {};
+        callback(data);
+      } catch (e) {
+        console.warn('[Notifications] Erreur listener received:', e);
+      }
+    }
+  );
+
+  return () => sub.remove();
+}
+
+/**
+ * 🆕 Récupère les données de la notification qui a lancé l'app (cold start).
+ * Utile quand l'app était fermée et que l'enfant tape la notif.
+ */
+export async function getInitialNotificationData(): Promise<Record<string, any> | null> {
+  if (!notificationsAvailable) return null;
+
+  try {
+    const response = await Notifications.getLastNotificationResponseAsync();
+    if (response?.notification?.request?.content?.data) {
+      return response.notification.request.content.data;
+    }
+    return null;
+  } catch (e) {
+    console.warn('[Notifications] Erreur getInitialNotificationData:', e);
+    return null;
+  }
+}
+
+/**
+ * 🆕 Efface la dernière notification reçue (pour éviter de la retraiter).
+ */
+export async function clearLastNotificationResponse(): Promise<void> {
+  if (!notificationsAvailable) return;
+  try {
+    await Notifications.clearLastNotificationResponseAsync?.();
+  } catch (e) {
+    // Méthode pas toujours dispo
+  }
 }

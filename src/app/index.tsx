@@ -10,15 +10,19 @@ LogBox.ignoreLogs([
 
 import { AGENTS } from '@/agents';
 import {
+  buildEveningBriefingData,
+  buildMorningBriefingData,
+  EVENING_BRIEFING_PROMPT,
+  MORNING_BRIEFING_PROMPT,
+} from '@/agents/prof/briefing';
+import {
   addProfEvent,
   addScheduleItem,
   canOfferReviewToday,
   clearSchedule,
   getAllTopics,
   getEventsAwaitingGrade,
-  getEventsForDate,
   getEventsWithGrades,
-  getFragileTopics,
   getProfProfile,
   getProfState,
   getSchedule,
@@ -34,12 +38,11 @@ import {
   setWeatherCity,
   updateEveningBriefingTime,
   wasEveningBriefingSentToday,
-  wasMorningBriefingSentToday,
+  wasMorningBriefingSentToday
 } from '@/agents/prof/database';
 import {
   extractGradeFromMessage,
   extractSubjectFromGradeMessage,
-  formatEveningBriefingData,
   formatGradesForPrompt,
   formatPendingGradesContext,
   formatScheduleForPrompt,
@@ -104,7 +107,12 @@ import {
   updateMessageText,
 } from '@/config/database';
 import { saveFileToDocuments } from '@/config/files';
-import { requestNotificationPermission } from '@/config/notifications';
+import {
+  addNotificationReceivedListener,
+  addNotificationTapListener,
+  getInitialNotificationData,
+  requestNotificationPermission,
+} from '@/config/notifications';
 import { getLocalProfile } from '@/config/user';
 import { Colors } from '@/constants/theme';
 import { useMemory } from '@/hooks/useMemory';
@@ -253,19 +261,18 @@ export default function HomeScreen() {
   const [fileModalVisible, setFileModalVisible] = useState(false);
   const [pendingPhoto, setPendingPhoto] = useState<{ uri: string; base64?: string } | null>(null);
   const [photoModalVisible, setPhotoModalVisible] = useState(false);
-  // 🆕 Audio V1
   const [pendingAudio, setPendingAudio] = useState<{ uri: string; durationMs: number } | null>(null);
   const [audioModalVisible, setAudioModalVisible] = useState(false);
-  // 🆕 Podcast M4A
   const [podcastModalVisible, setPodcastModalVisible] = useState(false);
   const [pendingPodcastTitle, setPendingPodcastTitle] = useState<string>('');
   const [prefillText, setPrefillText] = useState('');
   const isMounted = useRef(true);
 
-  // 🆕 Hook Podcast
-  const podcastGenerator = usePodcastGenerator();
+  // 🔒 Verrouillage anti-doublon pour les briefings
+  const morningBriefingRunning = useRef(false);
+  const eveningBriefingRunning = useRef(false);
 
-  // 🧠 Hook Mémoire longue
+  const podcastGenerator = usePodcastGenerator();
   const memory = useMemory();
 
   useEffect(() => {
@@ -286,6 +293,59 @@ export default function HomeScreen() {
     });
     return () => subscription.remove();
   }, []);
+
+  // ============================================================
+  // 🆕 LISTENERS NOTIFICATIONS (briefing tapé / reçu / cold start)
+  // ============================================================
+
+  useEffect(() => {
+    // 1. Cold start : app ouverte depuis une notif (app était fermée)
+    (async () => {
+      try {
+        const data = await getInitialNotificationData();
+        if (data && typeof data.type === 'string') {
+          console.log('📬 [Notif] Cold start:', data.type);
+          // Attendre que le chat Prof soit chargé
+          setTimeout(() => {
+            if (data.type === 'morning_briefing') {
+              checkMorningBriefing(true);
+            } else if (data.type === 'evening_briefing') {
+              checkEveningBriefing(true);
+            }
+          }, 1500);
+        }
+      } catch (e) {
+        console.warn('[Notif] Erreur cold start:', e);
+      }
+    })();
+
+    // 2. Notification TAPÉE (app en background)
+    const removeTap = addNotificationTapListener((data) => {
+      console.log('📬 [Notif] Tapée:', data.type);
+      if (data.type === 'morning_briefing') {
+        if (selectedAgentId !== 'prof') setSelectedAgentId('prof');
+        setTimeout(() => checkMorningBriefing(true), 800);
+      } else if (data.type === 'evening_briefing') {
+        if (selectedAgentId !== 'prof') setSelectedAgentId('prof');
+        setTimeout(() => checkEveningBriefing(true), 800);
+      }
+    });
+
+    // 3. Notification REÇUE en foreground (app ouverte)
+    const removeReceived = addNotificationReceivedListener((data) => {
+      console.log('📬 [Notif] Reçue en foreground:', data.type);
+      if (data.type === 'morning_briefing') {
+        checkMorningBriefing(true);
+      } else if (data.type === 'evening_briefing') {
+        checkEveningBriefing(true);
+      }
+    });
+
+    return () => {
+      removeTap();
+      removeReceived();
+    };
+  }, [selectedAgentId]);
 
   useEffect(() => {
     const handleUrl = (url: string | null) => {
@@ -332,8 +392,8 @@ export default function HomeScreen() {
         const timer = setTimeout(() => {
           if (isMounted.current) {
             checkReviewProposal();
-            checkMorningBriefing();
-            checkEveningBriefing();
+            checkMorningBriefing(false);
+            checkEveningBriefing(false);
             checkWeatherCityPrompt();
           }
         }, 2500);
@@ -366,55 +426,66 @@ export default function HomeScreen() {
     }
   };
 
-  const checkMorningBriefing = async () => {
+  /**
+   * 🆕 V2 — Briefing du matin généré naturellement par DeepSeek.
+   * @param triggeredByNotification true si déclenché par une notif (force le message même si l'heure n'est pas encore passée)
+   */
+  const checkMorningBriefing = async (triggeredByNotification: boolean = false) => {
+    if (morningBriefingRunning.current) return;
+    morningBriefingRunning.current = true;
+
     try {
       const profile = getLocalProfile();
       if (!profile) return;
       const userId = profile.code ?? 'default';
       const db = await openProfDatabase();
       const state = await getProfState(db, userId);
+
       if (!state.morning_briefing_enabled) return;
 
       const alreadySent = await wasMorningBriefingSentToday(db, userId);
       if (alreadySent) return;
 
-      const now = new Date();
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      const briefingMinutes = state.morning_briefing_hour * 60 + state.morning_briefing_minute;
-      if (currentMinutes < briefingMinutes) return;
+      // Vérif heure : sauf si déclenché par notif (l'enfant a tapé volontairement)
+      if (!triggeredByNotification) {
+        const now = new Date();
+        const currentMinutes = now.getHours() * 60 + now.getMinutes();
+        const briefingMinutes = state.morning_briefing_hour * 60 + state.morning_briefing_minute;
+        if (currentMinutes < briefingMinutes) return;
+      }
 
-      const today = new Date();
-      const jsDay = today.getDay();
-      const dayOfWeek = jsDay === 0 ? 6 : jsDay - 1;
-      const schedule = await getSchedule(db, userId, dayOfWeek);
+      // Construire les données du briefing
+      const { hasData, promptData } = await buildMorningBriefingData(db, userId);
 
-      if (schedule.length === 0) {
+      if (!hasData) {
+        // Rien à dire → on marque comme envoyé pour ne pas relancer
         await markMorningBriefingSent(db, userId);
         return;
       }
 
-      const coursesText = schedule.map((item) => `${item.subject} à ${item.start_time}`).join(', ');
-      const childName = profile?.firstName ?? 'toi';
+      const enrichedPrompt = `${MORNING_BRIEFING_PROMPT}\n\n${getDateContext()}\n\n${promptData}`;
 
-      const fullProfile = await getProfProfile(db, userId);
-      let weatherText = '';
+      const apiMessages: ApiMessage[] = [{
+        role: 'user',
+        content: '[SYSTEME] Tu viens de recevoir les données du briefing du matin. Compose UN message court (3-5 lignes max) pour l\'enfant.',
+      }];
 
-      if (fullProfile?.weather_city && fullProfile.weather_enabled === 1) {
-        try {
-          const weather = await fetchWeather(db, userId, fullProfile.weather_city);
-          if (weather) {
-            weatherText = `\n${weather.current.temp}°C, ${weather.current.description} ${weather.current.temp < 12 ? '— prends un pull !' : weather.current.temp > 25 ? '— pense à boire de l\'eau 💧' : ''}`;
-          }
-        } catch (e) {
-          console.warn('[Prof] Erreur météo briefing:', e);
-        }
+      const result = await sendMessageToAgent({
+        messages: apiMessages,
+        agentSystemPrompt: enrichedPrompt,
+        enableTools: false,
+        agentId: 'prof',
+      });
+
+      if (!isMounted.current) return;
+      if (!result.reply) {
+        await markMorningBriefingSent(db, userId);
+        return;
       }
-
-      const message = `Bonjour ${childName} ! 👋 Aujourd'hui tu as : ${coursesText}.${weatherText} Bonne journée ! 💪`;
 
       const briefingMessage: ChatMessage = {
         id: `agent-morning-${Date.now()}`,
-        text: message,
+        text: result.reply,
         isUser: false,
       };
       setMessages((prev) => [...prev, briefingMessage]);
@@ -422,57 +493,50 @@ export default function HomeScreen() {
       await markMorningBriefingSent(db, userId);
     } catch (e) {
       console.warn('[Prof] Erreur checkMorningBriefing:', e);
+    } finally {
+      morningBriefingRunning.current = false;
     }
   };
 
-  const checkEveningBriefing = async () => {
+  /**
+   * 🆕 V2 — Briefing du soir généré naturellement par DeepSeek.
+   * @param triggeredByNotification true si déclenché par une notif
+   */
+  const checkEveningBriefing = async (triggeredByNotification: boolean = false) => {
+    if (eveningBriefingRunning.current) return;
+    eveningBriefingRunning.current = true;
+
     try {
       const profile = getLocalProfile();
       if (!profile) return;
       const userId = profile.code ?? 'default';
       const db = await openProfDatabase();
       const state = await getProfState(db, userId);
+
       if (!state.evening_briefing_enabled) return;
 
       const alreadySent = await wasEveningBriefingSentToday(db, userId);
       if (alreadySent) return;
 
-      const now = new Date();
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      const briefingMinutes = state.evening_briefing_hour * 60 + state.evening_briefing_minute;
-      if (currentMinutes < briefingMinutes) return;
+      if (!triggeredByNotification) {
+        const now = new Date();
+        const currentMinutes = now.getHours() * 60 + now.getMinutes();
+        const briefingMinutes = state.evening_briefing_hour * 60 + state.evening_briefing_minute;
+        if (currentMinutes < briefingMinutes) return;
+      }
 
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const jsDay = tomorrow.getDay();
-      const dayOfWeek = jsDay === 0 ? 6 : jsDay - 1;
+      const { hasData, promptData, pendingGrades } = await buildEveningBriefingData(db, userId);
 
-      const tomorrowEvents = await getEventsForDate(db, userId, tomorrow);
-      const tomorrowSchedule = await getSchedule(db, userId, dayOfWeek);
-      const fragileTopics = await getFragileTopics(db, userId);
-      const pendingGrades = await getEventsAwaitingGrade(db, userId);
-
-      if (
-        tomorrowEvents.length === 0 &&
-        fragileTopics.length === 0 &&
-        tomorrowSchedule.length === 0 &&
-        pendingGrades.length === 0
-      ) {
+      if (!hasData) {
         await markEveningBriefingSent(db, userId);
         return;
       }
 
-      const eveningData = formatEveningBriefingData(
-        tomorrowEvents,
-        tomorrowSchedule,
-        fragileTopics,
-        pendingGrades
-      );
-      const enrichedPrompt = `${EVENING_BRIEFING_PROMPT}\n\n${getDateContext()}\n\n${eveningData}`;
+      const enrichedPrompt = `${EVENING_BRIEFING_PROMPT}\n\n${getDateContext()}\n\n${promptData}`;
 
       const apiMessages: ApiMessage[] = [{
         role: 'user',
-        content: '[SYSTEME] Tu viens de recevoir les données du rappel du soir. Compose UN message court (3-5 lignes max) pour l\'enfant.',
+        content: '[SYSTEME] Tu viens de recevoir les données du briefing du soir. Compose UN message court (3-5 lignes max) pour l\'enfant.',
       }];
 
       const result = await sendMessageToAgent({
@@ -505,6 +569,8 @@ export default function HomeScreen() {
       await markEveningBriefingSent(db, userId);
     } catch (e) {
       console.warn('[Prof] Erreur checkEveningBriefing:', e);
+    } finally {
+      eveningBriefingRunning.current = false;
     }
   };
 
@@ -634,7 +700,6 @@ export default function HomeScreen() {
         return `Fiche enregistrée : ${title}`;
       }
 
-      // 🆕 PODCAST — Retourne un marqueur, c'est handleSend qui gère la génération
       if (call.name === 'createPodcast') {
         const title = (args.title || 'Podcast').substring(0, 60);
         const transcript = args.transcript || '';
@@ -806,6 +871,26 @@ export default function HomeScreen() {
         }
       }
 
+      if (call.name === 'updateMorningBriefing') {
+        const { updateMorningBriefingTime } = await import('@/agents/prof/database');
+        await updateMorningBriefingTime(profDb, userId, args.hour, args.minute);
+        await scheduleMorningBriefing(profDb, userId, args.hour, args.minute);
+        return `Rappel du matin modifié à ${args.hour}h${args.minute.toString().padStart(2, '0')}`;
+      }
+
+      if (call.name === 'toggleMorningBriefing') {
+        const { disableMorningBriefing } = await import('@/agents/prof/database');
+        const { cancelMorningBriefing } = await import('@/agents/prof/notifications');
+        if (args.enabled) {
+          const state = await getProfState(profDb, userId);
+          await scheduleMorningBriefing(profDb, userId, state.morning_briefing_hour, state.morning_briefing_minute);
+          return 'Rappel du matin activé';
+        } else {
+          await cancelMorningBriefing(profDb, userId);
+          return 'Rappel du matin désactivé';
+        }
+      }
+
       if (call.name === 'createDocument') {
         const docId = `doc-${Date.now()}`;
         saveDocument({ id: docId, agentId, title: args.title, content: args.content });
@@ -920,7 +1005,6 @@ export default function HomeScreen() {
       let systemPrompt = selectedAgent.systemPrompt;
       systemPrompt = `${systemPrompt}\n\n${getDateContext()}`;
 
-      // 🧠 MÉMOIRE LONGUE — Injection du contexte mémoire (Prof uniquement)
       if (selectedAgent.id === 'prof') {
         try {
           const profile = getLocalProfile();
@@ -937,10 +1021,8 @@ export default function HomeScreen() {
 
       if (selectedAgent.id === 'prof' && isBilanRequest(text)) {
         try {
-          const profDb = await openProfDatabase();
           const profile = getLocalProfile();
           const userId = profile?.code ?? 'default';
-
           const lower = text.toLowerCase();
           let days = 30;
           if (lower.includes('semaine')) days = 7;
@@ -1175,7 +1257,6 @@ export default function HomeScreen() {
           break;
         }
 
-        // 🆕 PODCAST — Sauvegarde immédiate d'un placeholder + mise à jour à la fin
         const podcastResult = findToolResult(allToolResults, '__PODCAST__:');
         if (podcastResult) {
           const jsonStr = podcastResult.replace('__PODCAST__:', '');
@@ -1189,7 +1270,6 @@ export default function HomeScreen() {
           if (podcastData) {
             const { title, transcript } = podcastData;
 
-            // 📌 Sauvegarde IMMÉDIATE du message placeholder
             const podcastMsgId = `agent-podcast-${Date.now()}`;
             const placeholderText = `🎙️ Génération du podcast "${title}" en cours…`;
             const placeholderMessage: ChatMessage = {
@@ -1205,19 +1285,15 @@ export default function HomeScreen() {
               isUser: false,
             });
 
-            // Ouvre le modal de génération
             setPendingPodcastTitle(title);
             setPodcastModalVisible(true);
 
-            // Lance la génération (async)
             podcastGenerator.generate(transcript, title).then((result) => {
-              // Fermer le modal
               setPodcastModalVisible(false);
 
               if (!result.success) {
                 console.warn('[Podcast] Échec:', result.error);
                 const errorText = `😕 Je n'ai pas réussi à générer le podcast "${title}". Réessaie dans un instant.`;
-                // Mise à jour du message placeholder avec le texte d'erreur
                 updateMessageText(podcastMsgId, errorText);
                 setMessages((prev) =>
                   prev.map((m) =>
@@ -1227,7 +1303,6 @@ export default function HomeScreen() {
                 return;
               }
 
-              // ✅ Sauvegarde du fichier dans la bibliothèque
               const docId = `doc-podcast-${Date.now()}`;
               saveDocument({
                 id: docId,
@@ -1238,7 +1313,6 @@ export default function HomeScreen() {
                 fileType: 'audio/m4a',
               });
 
-              // ✅ Mise à jour du message placeholder avec le texte final
               const finalText = `🎙️ Ton podcast "${title}" est prêt !\n\n📚 Tu le retrouveras dans ta bibliothèque, onglet Audios. Tu peux l'écouter autant de fois que tu veux.`;
               updateMessageText(podcastMsgId, finalText);
               setMessages((prev) =>
@@ -1288,15 +1362,12 @@ export default function HomeScreen() {
         }
       }
 
-      // 🧠 MÉMOIRE LONGUE — Déclenchement asynchrone (non bloquant)
       if (selectedAgent.id === 'prof') {
         const profile = getLocalProfile();
         const userId = profile?.code ?? 'default';
-        // Résumé de conversation (30 messages ou 24h)
         memory.maybeGenerateSummary(userId).catch((e) => {
           console.warn('[Mémoire] Erreur génération résumé:', e);
         });
-        // Extraction des patterns (tous les 15 messages)
         memory.maybeExtractPatterns(userId).catch((e) => {
           console.warn('[Mémoire] Erreur extraction patterns:', e);
         });
@@ -1534,7 +1605,6 @@ export default function HomeScreen() {
           break;
         }
 
-        // 🆕 PODCAST
         const podcastResult = findToolResult(allToolResults, '__PODCAST__:');
         if (podcastResult) {
           const jsonStr = podcastResult.replace('__PODCAST__:', '');
@@ -1809,7 +1879,6 @@ export default function HomeScreen() {
           break;
         }
 
-        // 🆕 PODCAST
         const podcastResult = findToolResult(allToolResults, '__PODCAST__:');
         if (podcastResult) {
           const jsonStr = podcastResult.replace('__PODCAST__:', '');
@@ -1926,10 +1995,6 @@ export default function HomeScreen() {
     setPendingPhoto(null);
   };
 
-  // ============================================================
-  // 🎙️ AUDIO V1 — handlers
-  // ============================================================
-
   const handleAudioRecorded = (audioUri: string, durationMs: number) => {
     setPendingAudio({ uri: audioUri, durationMs });
     setAudioModalVisible(true);
@@ -2034,10 +2099,6 @@ export default function HomeScreen() {
     setAudioModalVisible(false);
     setPendingAudio(null);
   };
-
-  // ============================================================
-  // 🎙️ PODCAST M4A — cancel uniquement
-  // ============================================================
 
   const handlePodcastCancel = async () => {
     setPodcastModalVisible(false);
@@ -2173,16 +2234,6 @@ export default function HomeScreen() {
     </SafeAreaView>
   );
 }
-
-const EVENING_BRIEFING_PROMPT = `Tu es "Prof". Tu prépares ton rappel du soir pour l'enfant.
-Tu viens de recevoir des données sur la journée de demain et éventuellement
-des contrôles passés en attente de note.
-Compose UN SEUL message court (3-5 lignes max), chaleureux, utile.
-Tu choisis les informations les PLUS importantes. Tu ne listes pas tout.
-Exemples :
-- "Demain tu as un contrôle de Maths, tu veux qu'on révise 10 minutes ? 💪"
-- "Pense à préparer tes affaires de sport pour demain 🎒"
-- "Au fait, tu as eu ta note de Maths ? Tu peux me la dire ! 📝"`;
 
 const PROF_REVIEW_PROMPT = `Tu es "Prof". Tu viens de recevoir des notions à revoir.
 Propose spontanément une révision à l'enfant avec un message COURT (2-3 lignes max).
