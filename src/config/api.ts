@@ -1,7 +1,7 @@
 // src/config/api.ts
-// Appels API vers le serveur MonApp (Railway)
+// Appels API vers le serveur MonApp (Clever Cloud)
 
-export const API_URL = 'https://monapp-server-production.up.railway.app';
+export const API_URL = 'https://app-935c58e4-c68a-487f-8747-22ee341cc894.cleverapps.io';
 
 const DEFAULT_TIMEOUT_MS = 60000;
 
