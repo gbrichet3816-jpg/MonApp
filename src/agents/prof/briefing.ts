@@ -8,12 +8,12 @@ import {
     getFragileTopics,
     getProfProfile,
     getSchedule,
-    type ProfEvent
+    type ProfEvent,
 } from './database';
 import { fetchWeather } from './weather';
 
 // ============================================================
-// CONSTANTES
+// PROMPTS
 // ============================================================
 
 export const MORNING_BRIEFING_PROMPT = `Tu es "Prof". Tu composes ton BRIEFING DU MATIN pour l'enfant.
@@ -36,7 +36,7 @@ Pense à prendre ton sac 🎒 Ton premier cours est à 8h30 (Maths). Bonne journ
 - Ne liste PAS tous les cours, juste le PREMIER.
 - Pas de chiffres bruts (humidité, pression).
 - Un seul conseil météo.
-- Termine par un encouragement court (pas de superlatif excessif).`;
+- Termine par un encouragement court.`;
 
 export const EVENING_BRIEFING_PROMPT = `Tu es "Prof". Tu composes ton BRIEFING DU SOIR pour l'enfant.
 Tu viens de recevoir les données sur la journée de demain et éventuellement
@@ -62,6 +62,51 @@ Tu as : Français à 8h30, Maths à 10h30, Histoire à 14h. Bonne soirée ! »
 - Pas de chiffres bruts, ton chaleureux.`;
 
 // ============================================================
+// EXCEPTIONS JOURS SANS COURS
+// ============================================================
+
+/**
+ * Détermine si on doit SKIPPER le briefing matin aujourd'hui.
+ * Règle : dimanche matin → skip, SAUF si l'EDT contient un cours dimanche.
+ * Tous les autres jours → on envoie.
+ */
+export async function shouldSkipMorningBriefing(
+  db: SQLite.SQLiteDatabase,
+  userId: string
+): Promise<boolean> {
+  const today = new Date();
+  const jsDay = today.getDay(); // 0 = dimanche, 1 = lundi, …, 6 = samedi
+
+  // Seul dimanche matin est skip par défaut
+  if (jsDay !== 0) return false;
+
+  // Dimanche : vérifier si l'EDT contient un cours dimanche (day_of_week = 6)
+  const sundaySchedule = await getSchedule(db, userId, 6);
+  return sundaySchedule.length === 0;
+}
+
+/**
+ * Détermine si on doit SKIPPER le briefing soir aujourd'hui (= veille de demain).
+ * Règle : si demain = dimanche ET pas de cours dimanche → skip.
+ * Tous les autres jours → on envoie.
+ */
+export async function shouldSkipEveningBriefing(
+  db: SQLite.SQLiteDatabase,
+  userId: string
+): Promise<boolean> {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const jsDay = tomorrow.getDay();
+
+  // Seul samedi soir (veille dimanche) est skip par défaut
+  if (jsDay !== 0) return false;
+
+  // Demain = dimanche : vérifier si l'EDT contient un cours dimanche (day_of_week = 6)
+  const sundaySchedule = await getSchedule(db, userId, 6);
+  return sundaySchedule.length === 0;
+}
+
+// ============================================================
 // BRIEFING DU MATIN
 // ============================================================
 
@@ -70,23 +115,17 @@ export interface MorningBriefingData {
   promptData: string;
 }
 
-/**
- * Construit les données du briefing du matin.
- * Renvoie `hasData: false` si rien à dire (pas d'EDT, pas de météo).
- */
 export async function buildMorningBriefingData(
   db: SQLite.SQLiteDatabase,
   userId: string
 ): Promise<MorningBriefingData> {
   const profile = await getProfProfile(db, userId);
 
-  // Récupérer les cours d'aujourd'hui
   const today = new Date();
   const jsDay = today.getDay();
   const dayOfWeek = jsDay === 0 ? 6 : jsDay - 1;
   const schedule = await getSchedule(db, userId, dayOfWeek);
 
-  // Récupérer la météo (si ville enregistrée)
   let weatherBlock = '';
   if (profile?.weather_city && profile.weather_enabled === 1) {
     try {
@@ -110,7 +149,6 @@ export async function buildMorningBriefingData(
     }
   }
 
-  // Si rien du tout → pas de briefing utile
   if (schedule.length === 0 && !weatherBlock) {
     return { hasData: false, promptData: '' };
   }
@@ -172,10 +210,6 @@ export interface EveningBriefingData {
   pendingGrades: ProfEvent[];
 }
 
-/**
- * Construit les données du briefing du soir.
- * Renvoie `hasData: false` si rien à dire.
- */
 export async function buildEveningBriefingData(
   db: SQLite.SQLiteDatabase,
   userId: string
@@ -192,7 +226,6 @@ export async function buildEveningBriefingData(
   const fragileTopics = await getFragileTopics(db, userId);
   const pendingGrades = await getEventsAwaitingGrade(db, userId);
 
-  // Si rien du tout → pas de briefing
   if (
     tomorrowEvents.length === 0 &&
     fragileTopics.length === 0 &&
@@ -245,7 +278,7 @@ export async function buildEveningBriefingData(
       lines.push(`- [ID: ${ev.id}] ${ev.subject} : ${ev.title} (il y a ${daysAgo} jours)`);
     }
     lines.push('');
-    lines.push('👉 Glisse une question COURTE pour demander la note (ex: "Au fait, tu as eu ta note de Maths ?")');
+    lines.push('👉 Glisse une question COURTE pour demander la note.');
     lines.push('');
   }
 
@@ -257,7 +290,7 @@ export async function buildEveningBriefingData(
   lines.push('- Liste les cours du lendemain (heure + matière)');
   lines.push('- Si contrôle demain → priorité absolue');
   lines.push('- Si note en attente → demande-la gentiment');
-  lines.push('- Ton chaleureux, pas de superlatif excessif');
+  lines.push('- Ton chaleureux');
 
   return {
     hasData: true,
@@ -265,3 +298,13 @@ export async function buildEveningBriefingData(
     pendingGrades,
   };
 }
+
+// ============================================================
+// MESSAGES "BRIEFING DÉSACTIVÉ"
+// ============================================================
+
+export const DISABLED_MORNING_MESSAGE = `Au fait, ton briefing du matin est désactivé 🙂
+Si tu veux le réactiver, dis-moi juste "active mon briefing du matin" — je te le remets quand tu veux !`;
+
+export const DISABLED_EVENING_MESSAGE = `Au fait, ton briefing du soir est désactivé 🙂
+Si tu veux le réactiver, dis-moi juste "active mon briefing du soir" — je te le remets quand tu veux !`;

@@ -25,9 +25,7 @@ export async function scheduleMorningBriefing(
     const state = await getProfState(db, userId);
     if (state.morning_briefing_notification_id) {
       try {
-        await Notifications.cancelScheduledNotificationAsync(
-          state.morning_briefing_notification_id
-        );
+        await Notifications.cancelScheduledNotificationAsync(state.morning_briefing_notification_id);
       } catch (e) {
         console.warn('[Prof] Impossible d\'annuler l\'ancienne notif matin:', e);
       }
@@ -71,9 +69,7 @@ export async function cancelMorningBriefing(
   try {
     const state = await getProfState(db, userId);
     if (state.morning_briefing_notification_id) {
-      await Notifications.cancelScheduledNotificationAsync(
-        state.morning_briefing_notification_id
-      );
+      await Notifications.cancelScheduledNotificationAsync(state.morning_briefing_notification_id);
     }
     await disableMorningBriefing(db, userId);
   } catch (e) {
@@ -82,21 +78,19 @@ export async function cancelMorningBriefing(
 }
 
 // ============================================================
-// 🆕 RAPPEL DU SOIR
+// RAPPEL DU SOIR
 // ============================================================
 
 /**
- * Calcule l'heure du rappel du soir selon le niveau de l'enfant.
- * - Primaire (cp_ce2, cm1_6e) : 17h30
- * - Collège/Lycée (5e_3e, lycee) : 18h30
+ * Horaires par défaut : matin 7h30, soir 18h45 (identiques pour tous).
+ * Conservé pour compatibilité avec l'ancien appel `getDefaultEveningHour(level)`.
  */
-export function getDefaultEveningHour(level: string | null | undefined): { hour: number; minute: number } {
-  if (!level) return { hour: 18, minute: 30 };
+export function getDefaultEveningHour(_level?: string | null): { hour: number; minute: number } {
+  return { hour: 18, minute: 45 };
+}
 
-  if (level === 'cp_ce2' || level === 'cm1_6e') {
-    return { hour: 17, minute: 30 };
-  }
-  return { hour: 18, minute: 30 };
+export function getDefaultMorningHour(): { hour: number; minute: number } {
+  return { hour: 7, minute: 30 };
 }
 
 export async function scheduleEveningBriefing(
@@ -109,9 +103,7 @@ export async function scheduleEveningBriefing(
     const state = await getProfState(db, userId);
     if (state.evening_briefing_notification_id) {
       try {
-        await Notifications.cancelScheduledNotificationAsync(
-          state.evening_briefing_notification_id
-        );
+        await Notifications.cancelScheduledNotificationAsync(state.evening_briefing_notification_id);
       } catch (e) {
         console.warn('[Prof] Impossible d\'annuler l\'ancienne notif soir:', e);
       }
@@ -155,9 +147,7 @@ export async function cancelEveningBriefing(
   try {
     const state = await getProfState(db, userId);
     if (state.evening_briefing_notification_id) {
-      await Notifications.cancelScheduledNotificationAsync(
-        state.evening_briefing_notification_id
-      );
+      await Notifications.cancelScheduledNotificationAsync(state.evening_briefing_notification_id);
     }
     await disableEveningBriefing(db, userId);
   } catch (e) {
@@ -178,30 +168,16 @@ export async function ensureBriefingsScheduled(
     const scheduled = await Notifications.getAllScheduledNotificationsAsync();
 
     if (state.morning_briefing_enabled && state.morning_briefing_notification_id) {
-      const exists = scheduled.some(
-        (n) => n.identifier === state.morning_briefing_notification_id
-      );
+      const exists = scheduled.some((n) => n.identifier === state.morning_briefing_notification_id);
       if (!exists) {
-        await scheduleMorningBriefing(
-          db,
-          userId,
-          state.morning_briefing_hour,
-          state.morning_briefing_minute
-        );
+        await scheduleMorningBriefing(db, userId, state.morning_briefing_hour, state.morning_briefing_minute);
       }
     }
 
     if (state.evening_briefing_enabled && state.evening_briefing_notification_id) {
-      const exists = scheduled.some(
-        (n) => n.identifier === state.evening_briefing_notification_id
-      );
+      const exists = scheduled.some((n) => n.identifier === state.evening_briefing_notification_id);
       if (!exists) {
-        await scheduleEveningBriefing(
-          db,
-          userId,
-          state.evening_briefing_hour,
-          state.evening_briefing_minute
-        );
+        await scheduleEveningBriefing(db, userId, state.evening_briefing_hour, state.evening_briefing_minute);
       }
     }
   } catch (e) {
@@ -209,5 +185,5 @@ export async function ensureBriefingsScheduled(
   }
 }
 
-// Ancien nom conservé pour compatibilité avec index.tsx
+// Ancien nom conservé pour compatibilité
 export const ensureMorningBriefingScheduled = ensureBriefingsScheduled;

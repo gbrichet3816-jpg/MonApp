@@ -4,30 +4,19 @@
 
 import * as SQLite from 'expo-sqlite';
 
-// 🆕 Utilise la même base que src/config/database.ts
 const DB_NAME = 'monapp.db';
 
 let profDb: SQLite.SQLiteDatabase | null = null;
 let isInitialized = false;
 
-/**
- * Ouvre (ou récupère) la base de données.
- * Utilise openDatabaseSync (synchrone) pour éviter le bug
- * NativeDatabase.prepareAsync sur Expo SDK 57.
- */
 export function openProfDatabaseSync(): SQLite.SQLiteDatabase {
-  if (profDb && isInitialized) {
-    return profDb;
-  }
-
+  if (profDb && isInitialized) return profDb;
   try {
     profDb = SQLite.openDatabaseSync(DB_NAME);
-
     if (!isInitialized) {
       initProfTables(profDb);
       isInitialized = true;
     }
-
     return profDb;
   } catch (e) {
     profDb = null;
@@ -37,13 +26,11 @@ export function openProfDatabaseSync(): SQLite.SQLiteDatabase {
   }
 }
 
-// 🆕 Garde la version async pour compatibilité (appelle la version sync)
 export async function openProfDatabase(): Promise<SQLite.SQLiteDatabase> {
   return openProfDatabaseSync();
 }
 
 function initProfTables(db: SQLite.SQLiteDatabase): void {
-  // 1. Profil de l'enfant
   db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_profile (
       user_id TEXT PRIMARY KEY,
@@ -64,7 +51,6 @@ function initProfTables(db: SQLite.SQLiteDatabase): void {
     );
   `);
 
-  // 2. Historique des messages
   db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,7 +63,6 @@ function initProfTables(db: SQLite.SQLiteDatabase): void {
       ON prof_messages(user_id, created_at);
   `);
 
-  // 3. Emploi du temps
   db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_schedule (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,7 +79,6 @@ function initProfTables(db: SQLite.SQLiteDatabase): void {
       ON prof_schedule(user_id, day_of_week);
   `);
 
-  // 4. Événements (avec notes)
   db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,7 +98,6 @@ function initProfTables(db: SQLite.SQLiteDatabase): void {
       ON prof_events(user_id, due_date);
   `);
 
-  // 5. Notions travaillées
   db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_topics (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,7 +117,7 @@ function initProfTables(db: SQLite.SQLiteDatabase): void {
       ON prof_topics(user_id, next_review_at);
   `);
 
-  // 6. État général
+  // 🆕 Briefings activés par défaut + marqueurs "message désactivé envoyé"
   db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_state (
       user_id TEXT PRIMARY KEY,
@@ -142,19 +125,20 @@ function initProfTables(db: SQLite.SQLiteDatabase): void {
       last_morning_briefing_at INTEGER,
       morning_briefing_hour INTEGER DEFAULT 7,
       morning_briefing_minute INTEGER DEFAULT 30,
-      morning_briefing_enabled INTEGER DEFAULT 0,
+      morning_briefing_enabled INTEGER DEFAULT 1,
       morning_briefing_notification_id TEXT,
       last_evening_briefing_at INTEGER,
       evening_briefing_hour INTEGER DEFAULT 18,
-      evening_briefing_minute INTEGER DEFAULT 30,
-      evening_briefing_enabled INTEGER DEFAULT 0,
+      evening_briefing_minute INTEGER DEFAULT 45,
+      evening_briefing_enabled INTEGER DEFAULT 1,
       evening_briefing_notification_id TEXT,
       last_weather_refusal_prompt_at INTEGER,
+      last_disabled_morning_msg_at INTEGER,
+      last_disabled_evening_msg_at INTEGER,
       updated_at INTEGER NOT NULL
     );
   `);
 
-  // 🆕 7. Mémoire longue : résumés de conversations
   db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_summaries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,7 +153,6 @@ function initProfTables(db: SQLite.SQLiteDatabase): void {
       ON prof_summaries(user_id, created_at DESC);
   `);
 
-  // 🆕 8. Mémoire longue : comportements/méthodes apprises
   db.execSync(`
     CREATE TABLE IF NOT EXISTS prof_learned_patterns (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,7 +169,6 @@ function initProfTables(db: SQLite.SQLiteDatabase): void {
       ON prof_learned_patterns(user_id, confidence DESC);
   `);
 
-  // Migrations
   const migrations = [
     `ALTER TABLE prof_profile ADD COLUMN weather_city TEXT;`,
     `ALTER TABLE prof_profile ADD COLUMN weather_cache_json TEXT;`,
@@ -196,14 +178,16 @@ function initProfTables(db: SQLite.SQLiteDatabase): void {
     `ALTER TABLE prof_profile ADD COLUMN tts_downloaded INTEGER DEFAULT 0;`,
     `ALTER TABLE prof_state ADD COLUMN morning_briefing_hour INTEGER DEFAULT 7;`,
     `ALTER TABLE prof_state ADD COLUMN morning_briefing_minute INTEGER DEFAULT 30;`,
-    `ALTER TABLE prof_state ADD COLUMN morning_briefing_enabled INTEGER DEFAULT 0;`,
+    `ALTER TABLE prof_state ADD COLUMN morning_briefing_enabled INTEGER DEFAULT 1;`,
     `ALTER TABLE prof_state ADD COLUMN morning_briefing_notification_id TEXT;`,
     `ALTER TABLE prof_state ADD COLUMN last_evening_briefing_at INTEGER;`,
     `ALTER TABLE prof_state ADD COLUMN evening_briefing_hour INTEGER DEFAULT 18;`,
-    `ALTER TABLE prof_state ADD COLUMN evening_briefing_minute INTEGER DEFAULT 30;`,
-    `ALTER TABLE prof_state ADD COLUMN evening_briefing_enabled INTEGER DEFAULT 0;`,
+    `ALTER TABLE prof_state ADD COLUMN evening_briefing_minute INTEGER DEFAULT 45;`,
+    `ALTER TABLE prof_state ADD COLUMN evening_briefing_enabled INTEGER DEFAULT 1;`,
     `ALTER TABLE prof_state ADD COLUMN evening_briefing_notification_id TEXT;`,
     `ALTER TABLE prof_state ADD COLUMN last_weather_refusal_prompt_at INTEGER;`,
+    `ALTER TABLE prof_state ADD COLUMN last_disabled_morning_msg_at INTEGER;`,
+    `ALTER TABLE prof_state ADD COLUMN last_disabled_evening_msg_at INTEGER;`,
     `ALTER TABLE prof_events ADD COLUMN grade REAL;`,
     `ALTER TABLE prof_events ADD COLUMN grade_max REAL;`,
     `ALTER TABLE prof_events ADD COLUMN grade_at INTEGER;`,
@@ -211,11 +195,7 @@ function initProfTables(db: SQLite.SQLiteDatabase): void {
   ];
 
   for (const sql of migrations) {
-    try {
-      db.execSync(sql);
-    } catch (e) {
-      // Colonne existe déjà
-    }
+    try { db.execSync(sql); } catch (e) {}
   }
 }
 
@@ -295,10 +275,7 @@ export async function isTtsDownloaded(db: SQLite.SQLiteDatabase, userId: string)
 }
 
 export async function setTtsDownloaded(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
-  db.runSync(
-    `UPDATE prof_profile SET tts_downloaded = 1, updated_at = ? WHERE user_id = ?`,
-    [Date.now(), userId]
-  );
+  db.runSync(`UPDATE prof_profile SET tts_downloaded = 1, updated_at = ? WHERE user_id = ?`, [Date.now(), userId]);
 }
 
 // ============================================================
@@ -320,12 +297,9 @@ export async function cacheWeather(db: SQLite.SQLiteDatabase, userId: string, js
   try {
     if (!db) return;
     const now = Date.now();
-
     const profile = db.getFirstSync<{ user_id: string }>(
-      'SELECT user_id FROM prof_profile WHERE user_id = ?',
-      [userId]
+      'SELECT user_id FROM prof_profile WHERE user_id = ?', [userId]
     );
-
     if (!profile) {
       db.runSync(
         `INSERT INTO prof_profile (user_id, child_name, child_age, child_grade, child_level, created_at, updated_at)
@@ -333,7 +307,6 @@ export async function cacheWeather(db: SQLite.SQLiteDatabase, userId: string, js
         [userId, now, now]
       );
     }
-
     db.runSync(
       `UPDATE prof_profile SET weather_cache_json = ?, weather_cache_at = ?, updated_at = ? WHERE user_id = ?`,
       [json, now, now, userId]
@@ -346,7 +319,6 @@ export async function cacheWeather(db: SQLite.SQLiteDatabase, userId: string, js
 export async function getCachedWeather(db: SQLite.SQLiteDatabase, userId: string): Promise<string | null> {
   try {
     if (!db) return null;
-
     const profile = await getProfProfile(db, userId);
     if (!profile || !profile.weather_cache_json || !profile.weather_cache_at) return null;
     const oneHourAgo = Date.now() - 60 * 60 * 1000;
@@ -505,10 +477,7 @@ export async function saveEventGrade(db: SQLite.SQLiteDatabase, eventId: number,
 
 export async function getEventsWithGrades(db: SQLite.SQLiteDatabase, userId: string): Promise<ProfEvent[]> {
   return db.getAllSync<ProfEvent>(
-    `SELECT * FROM prof_events
-     WHERE user_id = ? AND grade IS NOT NULL
-     ORDER BY grade_at DESC
-     LIMIT 50`,
+    `SELECT * FROM prof_events WHERE user_id = ? AND grade IS NOT NULL ORDER BY grade_at DESC LIMIT 50`,
     [userId]
   );
 }
@@ -612,6 +581,8 @@ export interface ProfState {
   evening_briefing_enabled: number;
   evening_briefing_notification_id: string | null;
   last_weather_refusal_prompt_at: number | null;
+  last_disabled_morning_msg_at: number | null;
+  last_disabled_evening_msg_at: number | null;
   updated_at: number;
 }
 
@@ -620,7 +591,13 @@ export async function getProfState(db: SQLite.SQLiteDatabase, userId: string): P
 
   if (!state) {
     const now = Date.now();
-    db.runSync(`INSERT OR IGNORE INTO prof_state (user_id, updated_at) VALUES (?, ?)`, [userId, now]);
+    db.runSync(
+      `INSERT OR IGNORE INTO prof_state
+       (user_id, morning_briefing_hour, morning_briefing_minute, morning_briefing_enabled,
+        evening_briefing_hour, evening_briefing_minute, evening_briefing_enabled, updated_at)
+       VALUES (?, 7, 30, 1, 18, 45, 1, ?)`,
+      [userId, now]
+    );
     state = db.getFirstSync<ProfState>('SELECT * FROM prof_state WHERE user_id = ?', [userId]);
     if (!state) {
       state = {
@@ -629,14 +606,16 @@ export async function getProfState(db: SQLite.SQLiteDatabase, userId: string): P
         last_morning_briefing_at: null,
         morning_briefing_hour: 7,
         morning_briefing_minute: 30,
-        morning_briefing_enabled: 0,
+        morning_briefing_enabled: 1,
         morning_briefing_notification_id: null,
         last_evening_briefing_at: null,
         evening_briefing_hour: 18,
-        evening_briefing_minute: 30,
-        evening_briefing_enabled: 0,
+        evening_briefing_minute: 45,
+        evening_briefing_enabled: 1,
         evening_briefing_notification_id: null,
         last_weather_refusal_prompt_at: null,
+        last_disabled_morning_msg_at: null,
+        last_disabled_evening_msg_at: null,
         updated_at: now,
       };
     }
@@ -660,6 +639,8 @@ export async function canOfferReviewToday(db: SQLite.SQLiteDatabase, userId: str
   const twentyHoursAgo = Date.now() - 20 * 60 * 60 * 1000;
   return state.last_review_offer_at < twentyHoursAgo;
 }
+
+// ============ BRIEFING MATIN ============
 
 export async function markMorningBriefingSent(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   const now = Date.now();
@@ -711,6 +692,30 @@ export async function updateMorningBriefingTime(db: SQLite.SQLiteDatabase, userI
   );
 }
 
+// 🆕 Marqueur "message briefing désactivé envoyé aujourd'hui"
+export async function markDisabledMorningMsgSent(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
+  const now = Date.now();
+  db.runSync(
+    `INSERT INTO prof_state (user_id, last_disabled_morning_msg_at, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET last_disabled_morning_msg_at = excluded.last_disabled_morning_msg_at, updated_at = excluded.updated_at`,
+    [userId, now, now]
+  );
+}
+
+export async function wasDisabledMorningMsgSentToday(db: SQLite.SQLiteDatabase, userId: string): Promise<boolean> {
+  const state = await getProfState(db, userId);
+  if (!state.last_disabled_morning_msg_at) return false;
+  const lastDate = new Date(state.last_disabled_morning_msg_at);
+  const today = new Date();
+  return (
+    lastDate.getDate() === today.getDate() &&
+    lastDate.getMonth() === today.getMonth() &&
+    lastDate.getFullYear() === today.getFullYear()
+  );
+}
+
+// ============ BRIEFING SOIR ============
+
 export async function markEveningBriefingSent(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   const now = Date.now();
   db.runSync(
@@ -761,6 +766,32 @@ export async function disableEveningBriefing(db: SQLite.SQLiteDatabase, userId: 
   );
 }
 
+// 🆕 Marqueur "message briefing désactivé envoyé aujourd'hui" (soir)
+export async function markDisabledEveningMsgSent(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
+  const now = Date.now();
+  db.runSync(
+    `INSERT INTO prof_state (user_id, last_disabled_evening_msg_at, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET last_disabled_evening_msg_at = excluded.last_disabled_evening_msg_at, updated_at = excluded.updated_at`,
+    [userId, now, now]
+  );
+}
+
+export async function wasDisabledEveningMsgSentToday(db: SQLite.SQLiteDatabase, userId: string): Promise<boolean> {
+  const state = await getProfState(db, userId);
+  if (!state.last_disabled_evening_msg_at) return false;
+  const lastDate = new Date(state.last_disabled_evening_msg_at);
+  const today = new Date();
+  return (
+    lastDate.getDate() === today.getDate() &&
+    lastDate.getMonth() === today.getMonth() &&
+    lastDate.getFullYear() === today.getFullYear()
+  );
+}
+
+// ============================================================
+// DIVERS
+// ============================================================
+
 export async function markWeatherRefusalPrompted(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   const now = Date.now();
   db.runSync(
@@ -771,7 +802,7 @@ export async function markWeatherRefusalPrompted(db: SQLite.SQLiteDatabase, user
 }
 
 // ============================================================
-// 🆕 MÉMOIRE LONGUE — RÉSUMÉS DE CONVERSATIONS
+// 🆕 MÉMOIRE LONGUE — RÉSUMÉS
 // ============================================================
 
 export interface ProfSummary {
@@ -821,10 +852,6 @@ export async function countSummaries(
   return row?.count ?? 0;
 }
 
-/**
- * Détecte si on doit générer un nouveau résumé.
- * Déclenchement : tous les 30 messages OU toutes les 24h.
- */
 export async function shouldGenerateSummary(
   db: SQLite.SQLiteDatabase,
   userId: string
@@ -834,21 +861,17 @@ export async function shouldGenerateSummary(
       `SELECT period_end, messages_count FROM prof_summaries WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`,
       [userId]
     );
-
     const since = lastSummary ? lastSummary.period_end : 0;
     const countRow = db.getFirstSync<{ count: number }>(
       `SELECT COUNT(*) as count FROM prof_messages WHERE user_id = ? AND created_at > ?`,
       [userId, since]
     );
     const messageCount = countRow?.count ?? 0;
-
     if (messageCount >= 30) return true;
-
     if (lastSummary) {
       const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
       if (lastSummary.period_end < twentyFourHoursAgo && messageCount >= 10) return true;
     }
-
     return false;
   } catch (e) {
     console.warn('[Prof DB] shouldGenerateSummary échoué:', e);
@@ -856,9 +879,6 @@ export async function shouldGenerateSummary(
   }
 }
 
-/**
- * Récupère les messages à résumer (depuis le dernier résumé).
- */
 export async function getMessagesToSummarize(
   db: SQLite.SQLiteDatabase,
   userId: string
@@ -867,9 +887,7 @@ export async function getMessagesToSummarize(
     `SELECT period_end FROM prof_summaries WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`,
     [userId]
   );
-
   const since = lastSummary ? lastSummary.period_end : 0;
-
   return db.getAllSync<ProfMessage>(
     `SELECT * FROM prof_messages WHERE user_id = ? AND created_at > ? ORDER BY created_at ASC LIMIT 50`,
     [userId, since]
@@ -877,7 +895,7 @@ export async function getMessagesToSummarize(
 }
 
 // ============================================================
-// 🆕 MÉMOIRE LONGUE — COMPORTEMENTS APPRIS
+// 🆕 MÉMOIRE LONGUE — PATTERNS
 // ============================================================
 
 export interface ProfLearnedPattern {
@@ -898,18 +916,14 @@ export async function saveLearnedPattern(
   pattern: string
 ): Promise<void> {
   const now = Date.now();
-
   const existing = db.getFirstSync<ProfLearnedPattern>(
     `SELECT * FROM prof_learned_patterns WHERE user_id = ? AND category = ? AND pattern = ?`,
     [userId, category, pattern]
   );
-
   if (existing && existing.id !== undefined) {
     db.runSync(
       `UPDATE prof_learned_patterns
-       SET confidence = MIN(confidence + 1, 5),
-           times_observed = times_observed + 1,
-           updated_at = ?
+       SET confidence = MIN(confidence + 1, 5), times_observed = times_observed + 1, updated_at = ?
        WHERE id = ?`,
       [now, existing.id]
     );
@@ -928,22 +942,15 @@ export async function getLearnedPatterns(
   limit: number = 5
 ): Promise<ProfLearnedPattern[]> {
   return db.getAllSync<ProfLearnedPattern>(
-    `SELECT * FROM prof_learned_patterns
-     WHERE user_id = ?
-     ORDER BY confidence DESC, times_observed DESC
-     LIMIT ?`,
+    `SELECT * FROM prof_learned_patterns WHERE user_id = ? ORDER BY confidence DESC, times_observed DESC LIMIT ?`,
     [userId, limit]
   );
 }
 
 // ============================================================
-// 🆕 MÉMOIRE LONGUE — CONSTRUCTION DU CONTEXTE
+// 🆕 MÉMOIRE LONGUE — CONTEXTE
 // ============================================================
 
-/**
- * Construit le contexte mémoire à injecter dans le prompt Prof.
- * Format compact (~400 tokens max).
- */
 export async function buildMemoryContext(
   db: SQLite.SQLiteDatabase,
   userId: string

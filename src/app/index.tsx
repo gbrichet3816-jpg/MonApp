@@ -12,8 +12,12 @@ import { AGENTS } from '@/agents';
 import {
   buildEveningBriefingData,
   buildMorningBriefingData,
+  DISABLED_EVENING_MESSAGE,
+  DISABLED_MORNING_MESSAGE,
   EVENING_BRIEFING_PROMPT,
   MORNING_BRIEFING_PROMPT,
+  shouldSkipEveningBriefing,
+  shouldSkipMorningBriefing,
 } from '@/agents/prof/briefing';
 import {
   addProfEvent,
@@ -27,6 +31,8 @@ import {
   getProfState,
   getSchedule,
   getTopicsToReview,
+  markDisabledEveningMsgSent,
+  markDisabledMorningMsgSent,
   markEveningBriefingSent,
   markGradeAsked,
   markMorningBriefingSent,
@@ -37,6 +43,8 @@ import {
   saveTopicProgress,
   setWeatherCity,
   updateEveningBriefingTime,
+  wasDisabledEveningMsgSentToday,
+  wasDisabledMorningMsgSentToday,
   wasEveningBriefingSentToday,
   wasMorningBriefingSentToday
 } from '@/agents/prof/database';
@@ -53,13 +61,11 @@ import {
 } from '@/agents/prof/helpers';
 import {
   cancelEveningBriefing,
-  getDefaultEveningHour,
+  cancelMorningBriefing,
   scheduleEveningBriefing,
   scheduleMorningBriefing,
 } from '@/agents/prof/notifications';
-import {
-  shouldAskWeatherCity
-} from '@/agents/prof/onboarding';
+import { shouldAskWeatherCity } from '@/agents/prof/onboarding';
 import {
   extractCityChangeFromMessage,
   extractCityFromMessage,
@@ -120,7 +126,7 @@ import { usePodcastGenerator } from '@/hooks/usePodcastGenerator';
 import type { VisualData } from '@/utils/visualParser';
 
 // ============================================================
-// FONCTIONS UTILITAIRES
+// UTILITAIRES
 // ============================================================
 
 function decodeBase64Utf8(base64: string): string {
@@ -268,7 +274,6 @@ export default function HomeScreen() {
   const [prefillText, setPrefillText] = useState('');
   const isMounted = useRef(true);
 
-  // 🔒 Verrouillage anti-doublon pour les briefings
   const morningBriefingRunning = useRef(false);
   const eveningBriefingRunning = useRef(false);
 
@@ -282,6 +287,26 @@ export default function HomeScreen() {
     const profile = getLocalProfile();
     if (!profile) setNeedsOnboarding(true);
     setProfileReady(true);
+
+    (async () => {
+      try {
+        const p = getLocalProfile();
+        if (!p) return;
+        const userId = p.code ?? 'default';
+        const db = await openProfDatabase();
+        const state = await getProfState(db, userId);
+
+        if (state.morning_briefing_enabled && !state.morning_briefing_notification_id) {
+          await scheduleMorningBriefing(db, userId, state.morning_briefing_hour, state.morning_briefing_minute);
+        }
+        if (state.evening_briefing_enabled && !state.evening_briefing_notification_id) {
+          await scheduleEveningBriefing(db, userId, state.evening_briefing_hour, state.evening_briefing_minute);
+        }
+      } catch (e) {
+        console.warn('[Briefings] Erreur init planification:', e);
+      }
+    })();
+
     return () => { isMounted.current = false; };
   }, []);
 
@@ -294,24 +319,15 @@ export default function HomeScreen() {
     return () => subscription.remove();
   }, []);
 
-  // ============================================================
-  // 🆕 LISTENERS NOTIFICATIONS (briefing tapé / reçu / cold start)
-  // ============================================================
-
   useEffect(() => {
-    // 1. Cold start : app ouverte depuis une notif (app était fermée)
     (async () => {
       try {
         const data = await getInitialNotificationData();
         if (data && typeof data.type === 'string') {
           console.log('📬 [Notif] Cold start:', data.type);
-          // Attendre que le chat Prof soit chargé
           setTimeout(() => {
-            if (data.type === 'morning_briefing') {
-              checkMorningBriefing(true);
-            } else if (data.type === 'evening_briefing') {
-              checkEveningBriefing(true);
-            }
+            if (data.type === 'morning_briefing') checkMorningBriefing(true);
+            else if (data.type === 'evening_briefing') checkEveningBriefing(true);
           }, 1500);
         }
       } catch (e) {
@@ -319,7 +335,6 @@ export default function HomeScreen() {
       }
     })();
 
-    // 2. Notification TAPÉE (app en background)
     const removeTap = addNotificationTapListener((data) => {
       console.log('📬 [Notif] Tapée:', data.type);
       if (data.type === 'morning_briefing') {
@@ -331,14 +346,10 @@ export default function HomeScreen() {
       }
     });
 
-    // 3. Notification REÇUE en foreground (app ouverte)
     const removeReceived = addNotificationReceivedListener((data) => {
       console.log('📬 [Notif] Reçue en foreground:', data.type);
-      if (data.type === 'morning_briefing') {
-        checkMorningBriefing(true);
-      } else if (data.type === 'evening_briefing') {
-        checkEveningBriefing(true);
-      }
+      if (data.type === 'morning_briefing') checkMorningBriefing(true);
+      else if (data.type === 'evening_briefing') checkEveningBriefing(true);
     });
 
     return () => {
@@ -352,9 +363,7 @@ export default function HomeScreen() {
       if (!url) return;
       try {
         const parsed = Linking.parse(url);
-        console.log('🔗 Deep link reçu:', parsed);
         if (parsed.scheme?.startsWith('exp+')) return;
-
         if (parsed.path === 'prof' && parsed.queryParams?.notion) {
           const notion = String(parsed.queryParams.notion);
           setSelectedAgentId('prof');
@@ -372,7 +381,6 @@ export default function HomeScreen() {
 
   useEffect(() => {
     if (params.notion && typeof params.notion === 'string') {
-      console.log('🔗 Notion depuis deep link (redirect):', params.notion);
       setSelectedAgentId('prof');
       setPrefillText(`Explique-moi ${params.notion}`);
     }
@@ -381,7 +389,6 @@ export default function HomeScreen() {
   useEffect(() => {
     if (selectedAgentId) {
       const saved = loadMessages(selectedAgentId);
-      console.log('📂 [DB] Messages chargés:', saved.length, 'messages pour agent:', selectedAgentId);
       setMessages(saved);
 
       if (selectedAgentId === 'sante') {
@@ -426,10 +433,6 @@ export default function HomeScreen() {
     }
   };
 
-  /**
-   * 🆕 V2 — Briefing du matin généré naturellement par DeepSeek.
-   * @param triggeredByNotification true si déclenché par une notif (force le message même si l'heure n'est pas encore passée)
-   */
   const checkMorningBriefing = async (triggeredByNotification: boolean = false) => {
     if (morningBriefingRunning.current) return;
     morningBriefingRunning.current = true;
@@ -441,24 +444,41 @@ export default function HomeScreen() {
       const db = await openProfDatabase();
       const state = await getProfState(db, userId);
 
-      if (!state.morning_briefing_enabled) return;
+      const now = new Date();
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const briefingMinutes = state.morning_briefing_hour * 60 + state.morning_briefing_minute;
+
+      if (!state.morning_briefing_enabled) {
+        if (currentMinutes < briefingMinutes) return;
+        const skip = await shouldSkipMorningBriefing(db, userId);
+        if (skip) return;
+        const alreadySent = await wasDisabledMorningMsgSentToday(db, userId);
+        if (alreadySent) return;
+
+        const disabledMsg: ChatMessage = {
+          id: `agent-morning-disabled-${Date.now()}`,
+          text: DISABLED_MORNING_MESSAGE,
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, disabledMsg]);
+        saveMessage({ id: disabledMsg.id, agentId: 'prof', text: disabledMsg.text, isUser: false });
+        await markDisabledMorningMsgSent(db, userId);
+        return;
+      }
 
       const alreadySent = await wasMorningBriefingSentToday(db, userId);
       if (alreadySent) return;
 
-      // Vérif heure : sauf si déclenché par notif (l'enfant a tapé volontairement)
-      if (!triggeredByNotification) {
-        const now = new Date();
-        const currentMinutes = now.getHours() * 60 + now.getMinutes();
-        const briefingMinutes = state.morning_briefing_hour * 60 + state.morning_briefing_minute;
-        if (currentMinutes < briefingMinutes) return;
+      if (!triggeredByNotification && currentMinutes < briefingMinutes) return;
+
+      const skip = await shouldSkipMorningBriefing(db, userId);
+      if (skip) {
+        await markMorningBriefingSent(db, userId);
+        return;
       }
 
-      // Construire les données du briefing
       const { hasData, promptData } = await buildMorningBriefingData(db, userId);
-
       if (!hasData) {
-        // Rien à dire → on marque comme envoyé pour ne pas relancer
         await markMorningBriefingSent(db, userId);
         return;
       }
@@ -498,10 +518,6 @@ export default function HomeScreen() {
     }
   };
 
-  /**
-   * 🆕 V2 — Briefing du soir généré naturellement par DeepSeek.
-   * @param triggeredByNotification true si déclenché par une notif
-   */
   const checkEveningBriefing = async (triggeredByNotification: boolean = false) => {
     if (eveningBriefingRunning.current) return;
     eveningBriefingRunning.current = true;
@@ -513,20 +529,40 @@ export default function HomeScreen() {
       const db = await openProfDatabase();
       const state = await getProfState(db, userId);
 
-      if (!state.evening_briefing_enabled) return;
+      const now = new Date();
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const briefingMinutes = state.evening_briefing_hour * 60 + state.evening_briefing_minute;
+
+      if (!state.evening_briefing_enabled) {
+        if (currentMinutes < briefingMinutes) return;
+        const skip = await shouldSkipEveningBriefing(db, userId);
+        if (skip) return;
+        const alreadySent = await wasDisabledEveningMsgSentToday(db, userId);
+        if (alreadySent) return;
+
+        const disabledMsg: ChatMessage = {
+          id: `agent-evening-disabled-${Date.now()}`,
+          text: DISABLED_EVENING_MESSAGE,
+          isUser: false,
+        };
+        setMessages((prev) => [...prev, disabledMsg]);
+        saveMessage({ id: disabledMsg.id, agentId: 'prof', text: disabledMsg.text, isUser: false });
+        await markDisabledEveningMsgSent(db, userId);
+        return;
+      }
 
       const alreadySent = await wasEveningBriefingSentToday(db, userId);
       if (alreadySent) return;
 
-      if (!triggeredByNotification) {
-        const now = new Date();
-        const currentMinutes = now.getHours() * 60 + now.getMinutes();
-        const briefingMinutes = state.evening_briefing_hour * 60 + state.evening_briefing_minute;
-        if (currentMinutes < briefingMinutes) return;
+      if (!triggeredByNotification && currentMinutes < briefingMinutes) return;
+
+      const skip = await shouldSkipEveningBriefing(db, userId);
+      if (skip) {
+        await markEveningBriefingSent(db, userId);
+        return;
       }
 
       const { hasData, promptData, pendingGrades } = await buildEveningBriefingData(db, userId);
-
       if (!hasData) {
         await markEveningBriefingSent(db, userId);
         return;
@@ -634,14 +670,8 @@ export default function HomeScreen() {
     });
   };
 
-  // ============================================================
-  // EXECUTION UNIVERSELLE DES TOOLS
-  // ============================================================
-
   const executeToolCall = async (call: ToolCall, agentId: string): Promise<string> => {
     const args = call.arguments as any;
-    console.log('🔧 Exécution du tool:', call.name, args);
-
     try {
       const profDb = await openProfDatabase();
       const profile = getLocalProfile();
@@ -676,12 +706,7 @@ export default function HomeScreen() {
         if (!contentHtml) return 'Aucun contenu HTML fourni.';
 
         const docId = `sheet-${Date.now()}`;
-        saveDocument({
-          id: docId,
-          agentId,
-          title,
-          content: contentHtml,
-        });
+        saveDocument({ id: docId, agentId, title, content: contentHtml });
 
         const confirmationMessage = `📄 Ta fiche de révision est prête : "${title}"\n\nTu la retrouveras dans ta bibliothèque (icône 📚 en haut).`;
         const confirmationMsg: ChatMessage = {
@@ -690,12 +715,7 @@ export default function HomeScreen() {
           isUser: false,
         };
         setMessages((prev) => [...prev, confirmationMsg]);
-        saveMessage({
-          id: confirmationMsg.id,
-          agentId,
-          text: confirmationMsg.text,
-          isUser: false,
-        });
+        saveMessage({ id: confirmationMsg.id, agentId, text: confirmationMsg.text, isUser: false });
 
         return `Fiche enregistrée : ${title}`;
       }
@@ -704,15 +724,12 @@ export default function HomeScreen() {
         const title = (args.title || 'Podcast').substring(0, 60);
         const transcript = args.transcript || '';
         if (!transcript) return 'Aucun script fourni.';
-
         return `__PODCAST__:${JSON.stringify({ title, transcript })}`;
       }
 
       if (call.name === 'listGrades') {
         const events = await getEventsWithGrades(profDb, userId);
-        if (events.length === 0) {
-          return 'Aucune note enregistrée pour cet enfant pour le moment.';
-        }
+        if (events.length === 0) return 'Aucune note enregistrée pour cet enfant pour le moment.';
         const lines: string[] = ['Notes enregistrées :', ''];
         const bySubject: Record<string, any[]> = {};
         for (const e of events) {
@@ -759,13 +776,9 @@ export default function HomeScreen() {
 
       if (call.name === 'getWeather') {
         const city = args.city || (await getProfProfile(profDb, userId))?.weather_city;
-        if (!city) {
-          return 'Aucune ville renseignée. Demande à l\'enfant dans quelle ville il habite.';
-        }
+        if (!city) return 'Aucune ville renseignée. Demande à l\'enfant dans quelle ville il habite.';
         const weather = await fetchWeather(profDb, userId, city, true);
-        if (!weather) {
-          return `Impossible de récupérer la météo pour ${city}.`;
-        }
+        if (!weather) return `Impossible de récupérer la météo pour ${city}.`;
         return formatWeatherForPrompt(weather);
       }
 
@@ -781,9 +794,7 @@ export default function HomeScreen() {
       if (call.name === 'saveGrade') {
         const grade = parseFloat(args.grade);
         const gradeMax = parseFloat(args.grade_max);
-        if (isNaN(grade) || isNaN(gradeMax)) {
-          return 'Note invalide.';
-        }
+        if (isNaN(grade) || isNaN(gradeMax)) return 'Note invalide.';
         const eventId = parseInt(args.eventId);
         if (!isNaN(eventId) && eventId > 0) {
           await saveEventGrade(profDb, eventId, grade, gradeMax);
@@ -839,18 +850,6 @@ export default function HomeScreen() {
             teacher: item.teacher,
           });
         }
-        try {
-          const state = await getProfState(profDb, userId);
-          if (!state.morning_briefing_enabled) {
-            await scheduleMorningBriefing(profDb, userId, 7, 30);
-          }
-          if (!state.evening_briefing_enabled) {
-            const profileFull = await getProfProfile(profDb, userId);
-            const level = profileFull?.child_level ?? null;
-            const { hour, minute } = getDefaultEveningHour(level);
-            await scheduleEveningBriefing(profDb, userId, hour, minute);
-          }
-        } catch (e) { console.warn('[Prof] Planification briefings:', e); }
         return `Emploi du temps enregistré : ${args.items.length} cours`;
       }
 
@@ -879,8 +878,6 @@ export default function HomeScreen() {
       }
 
       if (call.name === 'toggleMorningBriefing') {
-        const { disableMorningBriefing } = await import('@/agents/prof/database');
-        const { cancelMorningBriefing } = await import('@/agents/prof/notifications');
         if (args.enabled) {
           const state = await getProfState(profDb, userId);
           await scheduleMorningBriefing(profDb, userId, state.morning_briefing_hour, state.morning_briefing_minute);
@@ -954,9 +951,7 @@ export default function HomeScreen() {
 
       if (call.name === 'deleteReminder') {
         const name = args.name || args.medicationName || '';
-        if (!name) {
-          return 'Nom du rappel manquant.';
-        }
+        if (!name) return 'Nom du rappel manquant.';
         deactivateRemindersByName(agentId, name);
         return `Rappel supprimé : "${name}"`;
       }
@@ -979,8 +974,6 @@ export default function HomeScreen() {
   const headerTitle = selectedAgent ? selectedAgent.name : 'Aucun agent';
 
   const handleSend = async (text: string) => {
-    console.log('🚀 handleSend appelé avec:', text);
-
     if (!selectedAgent) return;
 
     const userMessage: ChatMessage = { id: `user-${Date.now()}`, text, isUser: true };
@@ -1012,7 +1005,6 @@ export default function HomeScreen() {
           const memoryContext = await memory.loadContext(userId);
           if (memoryContext.context && memoryContext.context.trim().length > 0) {
             systemPrompt = `${systemPrompt}\n\n${memoryContext.context}`;
-            console.log('🧠 [Mémoire] Contexte injecté:', memoryContext.summaries, 'résumés,', memoryContext.patterns, 'patterns');
           }
         } catch (e) {
           console.warn('[Prof] Erreur injection mémoire:', e);
@@ -1031,9 +1023,7 @@ export default function HomeScreen() {
 
           const reportText = await buildActivityReportText(userId, days);
           systemPrompt = `${systemPrompt}\n\n${reportText}`;
-        } catch (e) {
-          console.warn('[Prof] bilan:', e);
-        }
+        } catch (e) { console.warn('[Prof] bilan:', e); }
       }
 
       if (selectedAgent.id === 'prof' && isGradesRequest(text)) {
@@ -1118,9 +1108,8 @@ export default function HomeScreen() {
         if (wantsQuiz) {
           const pastQuestions = getPastQuizQuestions(messages);
           if (pastQuestions.length > 0) {
-            const pastContext = `\n\n## ⚠️ QUESTIONS DÉJÀ POSÉES — À NE PAS REPOSER\n\nTu as déjà posé ces questions dans cette conversation. Génère des questions DIFFÉRENTES (autres dates, autres personnages, autres angles) :\n${pastQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`;
+            const pastContext = `\n\n## ⚠️ QUESTIONS DÉJÀ POSÉES — À NE PAS REPOSER\n\nTu as déjà posé ces questions dans cette conversation. Génère des questions DIFFÉRENTES :\n${pastQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`;
             systemPrompt = `${systemPrompt}${pastContext}`;
-            console.log('📚 Questions passées injectées :', pastQuestions.length);
           }
         }
       }
@@ -1130,16 +1119,12 @@ export default function HomeScreen() {
         content: m.text,
       }));
 
-      console.log('📤 Envoi à Prof...');
-
       const result = await sendMessageToAgent({
         messages: apiMessages,
         agentSystemPrompt: systemPrompt,
         enableTools: (selectedAgent as any).enableTools === true,
         agentId: selectedAgent.id,
       });
-
-      console.log('📥 Réponse reçue:', result.reply?.substring(0, 50), '| ToolCalls:', result.toolCalls?.length);
 
       if (!isMounted.current) return;
 
@@ -1154,7 +1139,6 @@ export default function HomeScreen() {
         loopCount < MAX_LOOPS
       ) {
         loopCount++;
-        console.log(`🔁 Boucle tool calling #${loopCount} — ${currentResult.toolCalls.length} tool(s)`);
 
         const allToolCalls = currentResult.toolCalls;
         const allToolResults: string[] = [];
@@ -1171,17 +1155,11 @@ export default function HomeScreen() {
           agentId: selectedAgent.id,
         });
 
-        console.log(`📥 Réponse boucle #${loopCount}:`, newResult.reply?.substring(0, 50));
-
         const quizResult = findToolResult(allToolResults, '__QUIZ__:');
         if (quizResult) {
           const jsonStr = quizResult.replace('__QUIZ__:', '');
           let quizData: { title: string; questions: any[] } | null = null;
-          try {
-            quizData = JSON.parse(jsonStr);
-          } catch (e) {
-            console.warn('[Prof] Erreur parsing quiz:', e);
-          }
+          try { quizData = JSON.parse(jsonStr); } catch (e) {}
 
           if (quizData) {
             const quizMessage: ChatMessage = {
@@ -1236,11 +1214,7 @@ export default function HomeScreen() {
         if (visualResult) {
           const jsonStr = visualResult.replace('__VISUAL__:', '');
           let visualData: VisualData | null = null;
-          try {
-            visualData = JSON.parse(jsonStr);
-          } catch (e) {
-            console.warn('[Prof] Erreur parsing visual:', e);
-          }
+          try { visualData = JSON.parse(jsonStr); } catch (e) {}
 
           if (visualData) {
             const visualMessage: ChatMessage = {
@@ -1261,11 +1235,7 @@ export default function HomeScreen() {
         if (podcastResult) {
           const jsonStr = podcastResult.replace('__PODCAST__:', '');
           let podcastData: { title: string; transcript: string } | null = null;
-          try {
-            podcastData = JSON.parse(jsonStr);
-          } catch (e) {
-            console.warn('[Prof] Erreur parsing podcast:', e);
-          }
+          try { podcastData = JSON.parse(jsonStr); } catch (e) {}
 
           if (podcastData) {
             const { title, transcript } = podcastData;
@@ -1278,12 +1248,7 @@ export default function HomeScreen() {
               isUser: false,
             };
             setMessages((prev) => [...prev, placeholderMessage]);
-            saveMessage({
-              id: podcastMsgId,
-              agentId: selectedAgent.id,
-              text: placeholderText,
-              isUser: false,
-            });
+            saveMessage({ id: podcastMsgId, agentId: selectedAgent.id, text: placeholderText, isUser: false });
 
             setPendingPodcastTitle(title);
             setPodcastModalVisible(true);
@@ -1292,13 +1257,10 @@ export default function HomeScreen() {
               setPodcastModalVisible(false);
 
               if (!result.success) {
-                console.warn('[Podcast] Échec:', result.error);
                 const errorText = `😕 Je n'ai pas réussi à générer le podcast "${title}". Réessaie dans un instant.`;
                 updateMessageText(podcastMsgId, errorText);
                 setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === podcastMsgId ? { ...m, text: errorText, isError: true } : m
-                  )
+                  prev.map((m) => m.id === podcastMsgId ? { ...m, text: errorText, isError: true } : m)
                 );
                 return;
               }
@@ -1316,9 +1278,7 @@ export default function HomeScreen() {
               const finalText = `🎙️ Ton podcast "${title}" est prêt !\n\n📚 Tu le retrouveras dans ta bibliothèque, onglet Audios. Tu peux l'écouter autant de fois que tu veux.`;
               updateMessageText(podcastMsgId, finalText);
               setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === podcastMsgId ? { ...m, text: finalText } : m
-                )
+                prev.map((m) => m.id === podcastMsgId ? { ...m, text: finalText } : m)
               );
             });
 
@@ -1365,12 +1325,8 @@ export default function HomeScreen() {
       if (selectedAgent.id === 'prof') {
         const profile = getLocalProfile();
         const userId = profile?.code ?? 'default';
-        memory.maybeGenerateSummary(userId).catch((e) => {
-          console.warn('[Mémoire] Erreur génération résumé:', e);
-        });
-        memory.maybeExtractPatterns(userId).catch((e) => {
-          console.warn('[Mémoire] Erreur extraction patterns:', e);
-        });
+        memory.maybeGenerateSummary(userId).catch((e) => console.warn('[Mémoire]', e));
+        memory.maybeExtractPatterns(userId).catch((e) => console.warn('[Mémoire]', e));
       }
     } catch (error) {
       if (!isMounted.current) return;
@@ -1394,9 +1350,7 @@ export default function HomeScreen() {
 
   const handleStopQuiz = async (messageId: string) => {
     if (!selectedAgent) return;
-
-    const prompt = `[SYSTEME] L'enfant a arrêté le quiz volontairement. Réagis gentiment, sans juger. Propose-lui autre chose (autre quiz, dictée, révision, discussion). Sois bref.`;
-
+    const prompt = `[SYSTEME] L'enfant a arrêté le quiz volontairement. Réagis gentiment, sans juger. Propose-lui autre chose. Sois bref.`;
     try {
       const result = await sendMessageToAgent({
         messages: [{ role: 'user', content: prompt }],
@@ -1404,9 +1358,7 @@ export default function HomeScreen() {
         enableTools: false,
         agentId: selectedAgent.id,
       });
-
       if (!isMounted.current) return;
-
       if (result.reply && result.reply.trim().length > 0) {
         const finalMessage: ChatMessage = {
           id: `agent-stop-quiz-${Date.now()}`,
@@ -1416,9 +1368,7 @@ export default function HomeScreen() {
         setMessages((prev) => [...prev, finalMessage]);
         saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
       }
-    } catch (e) {
-      console.warn('[Quiz] Erreur arrêt:', e);
-    }
+    } catch (e) { console.warn('[Quiz] Erreur arrêt:', e); }
   };
 
   const handleFilePicked = (file: ImportedFile) => {
@@ -1620,12 +1570,7 @@ export default function HomeScreen() {
               isUser: false,
             };
             setMessages((prev) => [...prev, placeholderMessage]);
-            saveMessage({
-              id: podcastMsgId,
-              agentId: selectedAgent.id,
-              text: placeholderText,
-              isUser: false,
-            });
+            saveMessage({ id: podcastMsgId, agentId: selectedAgent.id, text: placeholderText, isUser: false });
 
             setPendingPodcastTitle(title);
             setPodcastModalVisible(true);
@@ -1637,9 +1582,7 @@ export default function HomeScreen() {
                 const errorText = `😕 Je n'ai pas réussi à générer le podcast "${title}". Réessaie dans un instant.`;
                 updateMessageText(podcastMsgId, errorText);
                 setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === podcastMsgId ? { ...m, text: errorText, isError: true } : m
-                  )
+                  prev.map((m) => m.id === podcastMsgId ? { ...m, text: errorText, isError: true } : m)
                 );
                 return;
               }
@@ -1657,9 +1600,7 @@ export default function HomeScreen() {
               const finalText = `🎙️ Ton podcast "${title}" est prêt !\n\n📚 Tu le retrouveras dans ta bibliothèque, onglet Audios. Tu peux l'écouter autant de fois que tu veux.`;
               updateMessageText(podcastMsgId, finalText);
               setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === podcastMsgId ? { ...m, text: finalText } : m
-                )
+                prev.map((m) => m.id === podcastMsgId ? { ...m, text: finalText } : m)
               );
             });
 
@@ -1894,12 +1835,7 @@ export default function HomeScreen() {
               isUser: false,
             };
             setMessages((prev) => [...prev, placeholderMessage]);
-            saveMessage({
-              id: podcastMsgId,
-              agentId: selectedAgent.id,
-              text: placeholderText,
-              isUser: false,
-            });
+            saveMessage({ id: podcastMsgId, agentId: selectedAgent.id, text: placeholderText, isUser: false });
 
             setPendingPodcastTitle(title);
             setPodcastModalVisible(true);
@@ -1911,9 +1847,7 @@ export default function HomeScreen() {
                 const errorText = `😕 Je n'ai pas réussi à générer le podcast "${title}". Réessaie dans un instant.`;
                 updateMessageText(podcastMsgId, errorText);
                 setMessages((prev) =>
-                  prev.map((m) =>
-                    m.id === podcastMsgId ? { ...m, text: errorText, isError: true } : m
-                  )
+                  prev.map((m) => m.id === podcastMsgId ? { ...m, text: errorText, isError: true } : m)
                 );
                 return;
               }
@@ -1931,9 +1865,7 @@ export default function HomeScreen() {
               const finalText = `🎙️ Ton podcast "${title}" est prêt !\n\n📚 Tu le retrouveras dans ta bibliothèque, onglet Audios. Tu peux l'écouter autant de fois que tu veux.`;
               updateMessageText(podcastMsgId, finalText);
               setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === podcastMsgId ? { ...m, text: finalText } : m
-                )
+                prev.map((m) => m.id === podcastMsgId ? { ...m, text: finalText } : m)
               );
             });
 
@@ -2010,14 +1942,7 @@ export default function HomeScreen() {
     if (action === 'save' || action === 'agent+save') {
       const docId = `doc-audio-${Date.now()}`;
       const savedPath = await saveFileToDocuments(pendingAudio.uri, fileName);
-      saveDocument({
-        id: docId,
-        agentId: selectedAgent.id,
-        title,
-        content: message || '',
-        filePath: savedPath || undefined,
-        fileType: 'audio/m4a',
-      });
+      saveDocument({ id: docId, agentId: selectedAgent.id, title, content: message || '', filePath: savedPath || undefined, fileType: 'audio/m4a' });
 
       if (action === 'save') {
         Alert.alert('Enregistré !', `"${title}" est dans ta bibliothèque.`);
@@ -2034,18 +1959,13 @@ export default function HomeScreen() {
     };
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
-    saveMessage({
-      id: userMessage.id,
-      agentId: selectedAgent.id,
-      text: userMessage.text,
-      isUser: true,
-    });
+    saveMessage({ id: userMessage.id, agentId: selectedAgent.id, text: userMessage.text, isUser: true });
 
     setIsLoading(true);
 
     try {
       const durationSec = Math.round(pendingAudio.durationMs / 1000);
-      const content = `${userText}\n\n[Un fichier audio de ${durationSec}s est joint à ce message. La transcription automatique arrivera dans une prochaine version.]`;
+      const content = `${userText}\n\n[Un fichier audio de ${durationSec}s est joint à ce message.]`;
 
       const apiMessages: ApiMessage[] = [
         ...newMessages.slice(0, -1).map((m) => ({
@@ -2067,18 +1987,9 @@ export default function HomeScreen() {
       if (!isMounted.current) return;
 
       if (result.reply && result.reply.trim().length > 0) {
-        const agentMessage: ChatMessage = {
-          id: `agent-${Date.now()}`,
-          text: result.reply,
-          isUser: false,
-        };
+        const agentMessage: ChatMessage = { id: `agent-${Date.now()}`, text: result.reply, isUser: false };
         setMessages((prev) => [...prev, agentMessage]);
-        saveMessage({
-          id: agentMessage.id,
-          agentId: selectedAgent.id,
-          text: agentMessage.text,
-          isUser: false,
-        });
+        saveMessage({ id: agentMessage.id, agentId: selectedAgent.id, text: agentMessage.text, isUser: false });
       }
     } catch (error) {
       const errorMessage: ChatMessage = {
@@ -2111,8 +2022,6 @@ export default function HomeScreen() {
     questionIndex: number,
     userAnswer: string
   ) => {
-    console.log('[Quiz] Réponse:', { messageId, questionIndex, userAnswer });
-
     if (questionIndex === -1 && userAnswer.startsWith('STOP:')) {
       await handleStopQuiz(messageId);
       return;
@@ -2121,19 +2030,14 @@ export default function HomeScreen() {
     if (questionIndex === -1 && userAnswer.startsWith('FIN:')) {
       const scorePart = userAnswer.replace('FIN:', '');
       const [correct, total] = scorePart.split('/');
-
-      console.log(`🎉 Quiz terminé : ${correct}/${total}`);
-
       const quizMsg = messages.find((m) => m.id === messageId);
       const quizTitle = quizMsg?.quizTitle || 'Quiz';
-
       if (!selectedAgent) return;
 
-      const congratsPrompt = `[SYSTEME] L'enfant vient de terminer le quiz "${quizTitle}" avec un score de ${correct}/${total}. Félicite-le chaleureusement, commente son score (sans juger), et propose-lui soit un nouveau quiz sur un autre thème, soit une autre activité (dictée, révision, exercice). Sois bref et chaleureux.`;
+      const congratsPrompt = `[SYSTEME] L'enfant vient de terminer le quiz "${quizTitle}" avec un score de ${correct}/${total}. Félicite-le, commente son score, et propose-lui autre chose. Bref et chaleureux.`;
 
       try {
         const systemPromptWithDate = `${selectedAgent.systemPrompt}\n\n${getDateContext()}`;
-
         const result = await sendMessageToAgent({
           messages: [{ role: 'user', content: congratsPrompt }],
           agentSystemPrompt: systemPromptWithDate,
@@ -2150,16 +2054,9 @@ export default function HomeScreen() {
             isUser: false,
           };
           setMessages((prev) => [...prev, finalMessage]);
-          saveMessage({
-            id: finalMessage.id,
-            agentId: selectedAgent.id,
-            text: finalMessage.text,
-            isUser: false,
-          });
+          saveMessage({ id: finalMessage.id, agentId: selectedAgent.id, text: finalMessage.text, isUser: false });
         }
-      } catch (e) {
-        console.warn('[Quiz] Erreur félicitations:', e);
-      }
+      } catch (e) { console.warn('[Quiz] Erreur félicitations:', e); }
     }
   };
 
