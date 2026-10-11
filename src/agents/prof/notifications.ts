@@ -4,11 +4,11 @@
 import * as Notifications from 'expo-notifications';
 import * as SQLite from 'expo-sqlite';
 import {
-    disableEveningBriefing,
-    disableMorningBriefing,
-    enableEveningBriefing,
-    enableMorningBriefing,
-    getProfState,
+  disableEveningBriefing,
+  disableMorningBriefing,
+  enableEveningBriefing,
+  enableMorningBriefing,
+  getProfState,
 } from './database';
 
 // ============================================================
@@ -44,8 +44,8 @@ export async function scheduleMorningBriefing(
 
     const notificationId = await Notifications.scheduleNotificationAsync({
       content: {
-        title: 'Bonjour ! 👋',
-        body: 'Regarde ton emploi du temps du jour dans Prof 📅',
+        title: 'Bonjour ! ☀️',
+        body: 'Ton briefing du matin t\'attend. Ouvre l\'app pour le découvrir !',
         data: { agentId: 'prof', type: 'morning_briefing' },
         sound: true,
       },
@@ -96,7 +96,6 @@ export function getDefaultEveningHour(level: string | null | undefined): { hour:
   if (level === 'cp_ce2' || level === 'cm1_6e') {
     return { hour: 17, minute: 30 };
   }
-  // 5e_3e ou lycee
   return { hour: 18, minute: 30 };
 }
 
@@ -129,8 +128,8 @@ export async function scheduleEveningBriefing(
 
     const notificationId = await Notifications.scheduleNotificationAsync({
       content: {
-        title: 'Ce soir avec Prof 🌙',
-        body: 'Regarde ce que Prof a préparé pour toi',
+        title: 'Bonsoir ! 🌙',
+        body: 'Ton briefing du soir t\'attend. Ouvre l\'app pour préparer ton sac !',
         data: { agentId: 'prof', type: 'evening_briefing' },
         sound: true,
       },
@@ -178,7 +177,6 @@ export async function ensureBriefingsScheduled(
     const state = await getProfState(db, userId);
     const scheduled = await Notifications.getAllScheduledNotificationsAsync();
 
-    // Vérif briefing matin
     if (state.morning_briefing_enabled && state.morning_briefing_notification_id) {
       const exists = scheduled.some(
         (n) => n.identifier === state.morning_briefing_notification_id
@@ -193,7 +191,6 @@ export async function ensureBriefingsScheduled(
       }
     }
 
-    // Vérif briefing soir
     if (state.evening_briefing_enabled && state.evening_briefing_notification_id) {
       const exists = scheduled.some(
         (n) => n.identifier === state.evening_briefing_notification_id

@@ -13,6 +13,29 @@ const STOP_WORDS = new Set([
   'avec', 'sans', 'vers', 'chez', 'entre', 'contre',
 ]);
 
+// 🆕 Unités de mesure courantes (à ignorer si présentes uniquement dans l'attendu)
+const UNITS = [
+  // Longueur
+  'mm', 'cm', 'dm', 'm', 'km', 'micrometre', 'micrometres', 'millimetre', 'millimetres',
+  'centimetre', 'centimetres', 'metre', 'metres', 'kilometre', 'kilometres',
+  // Masse
+  'mg', 'g', 'kg', 't', 'tonne', 'tonnes', 'milligramme', 'milligrammes',
+  'gramme', 'grammes', 'kilogramme', 'kilogrammes',
+  // Volume
+  'ml', 'cl', 'dl', 'l', 'litre', 'litres', 'millilitre', 'millilitres',
+  'centilitre', 'centilitres', 'decilitre', 'decilitres',
+  // Temps
+  's', 'sec', 'seconde', 'secondes', 'min', 'mn', 'minute', 'minutes',
+  'h', 'heure', 'heures', 'j', 'jour', 'jours',
+  // Température
+  'c', 'f', 'k', 'celsius', 'fahrenheit', 'kelvin', 'degres', 'degre',
+  // Monnaie
+  'euro', 'euros', 'eur', 'centime', 'centimes', 'cent', 'cents',
+  // Autres
+  'm2', 'm3', 'cm2', 'cm3', 'km2', 'km3', 'ha', 'hectare', 'hectares',
+  'pourcent', 'pourcents', 'pour cent',
+];
+
 /**
  * Normalise une chaîne :
  * - minuscules
@@ -38,6 +61,53 @@ function removeStopWords(s: string): string {
     .split(' ')
     .filter((word) => !STOP_WORDS.has(word) && word.length > 0)
     .join(' ');
+}
+
+/**
+ * 🆕 Extrait uniquement les nombres d'une chaîne.
+ * Ex : "10 cm" → "10", "3 kg 500 g" → "3 500"
+ */
+function extractNumbers(s: string): string {
+  const matches = s.match(/-?\d+(?:[.,]\d+)?/g);
+  if (!matches) return '';
+  return matches.join(' ').replace(/,/g, '.');
+}
+
+/**
+ * 🆕 Vérifie si une chaîne ne contient QUE des nombres et unités.
+ * Ex : "10 cm" → true, "il fait 10 cm" → false
+ */
+function isNumberWithUnit(s: string): boolean {
+  const normalized = normalize(s);
+  const withoutUnits = normalized
+    .split(' ')
+    .filter((word) => !UNITS.includes(word))
+    .join(' ')
+    .trim();
+  // Si après retrait des unités, il ne reste que des chiffres et espaces
+  return /^[\d\s.,\-]+$/.test(withoutUnits) && withoutUnits.length > 0;
+}
+
+/**
+ * 🆕 Compare 2 chaînes en ignorant les unités si elles ne sont présentes que d'un côté.
+ * Ex : "10" vs "10 cm" → true
+ * Ex : "10 cm" vs "10 m" → false (unités différentes mais nombre identique)
+ */
+function compareNumbersIgnoringUnits(given: string, expected: string): boolean {
+  // Au moins une des deux doit être "nombre + unité"
+  const givenIsNum = isNumberWithUnit(given);
+  const expectedIsNum = isNumberWithUnit(expected);
+
+  if (!givenIsNum && !expectedIsNum) return false;
+
+  // Extraire les nombres des deux côtés
+  const givenNums = extractNumbers(given);
+  const expectedNums = extractNumbers(expected);
+
+  if (!givenNums || !expectedNums) return false;
+
+  // Les nombres doivent être identiques
+  return givenNums === expectedNums;
 }
 
 /**
@@ -89,6 +159,7 @@ function isSimilar(a: string, b: string, tolerance: number = 2): boolean {
  * - Les fautes de frappe légères (« Hittler » vs « Hitler ») ✅
  * - Les accents (« Mathéo » vs « Matheo ») ✅
  * - Les mots en trop (« Adolph Hitler » vs « Hitler ») ✅ si l'un contient l'autre
+ * - 🆕 Les unités manquantes (« 10 » vs « 10 cm ») ✅
  */
 export function answersMatchLocal(given: string, expected: string): boolean {
   if (!given || !expected) return false;
@@ -99,23 +170,42 @@ export function answersMatchLocal(given: string, expected: string): boolean {
   // 1. Comparaison directe après normalisation
   if (normalizedGiven === normalizedExpected) return true;
 
-  // 2. Comparaison après retrait des mots vides
+  // 🆕 2. Comparaison nombre + unité (AVANT les autres règles)
+  //    "10" vs "10 cm" → true
+  //    "10 cm" vs "10" → true
+  //    "10 cm" vs "10 m" → false (nombres identiques mais unités différentes)
+  if (compareNumbersIgnoringUnits(given, expected)) {
+    // Si les unités sont différentes ET présentes des 2 côtés → refuser
+    const givenHasUnit = UNITS.some((u) => normalizedGiven.includes(` ${u}`) || normalizedGiven.endsWith(u));
+    const expectedHasUnit = UNITS.some((u) => normalizedExpected.includes(` ${u}`) || normalizedExpected.endsWith(u));
+
+    if (givenHasUnit && expectedHasUnit) {
+      // Les deux ont une unité → vérifier qu'elles sont identiques
+      const givenUnit = UNITS.find((u) => normalizedGiven.includes(` ${u}`) || normalizedGiven.endsWith(u));
+      const expectedUnit = UNITS.find((u) => normalizedExpected.includes(` ${u}`) || normalizedExpected.endsWith(u));
+      if (givenUnit !== expectedUnit) return false;
+    }
+
+    return true;
+  }
+
+  // 3. Comparaison après retrait des mots vides
   const givenNoStop = removeStopWords(normalizedGiven);
   const expectedNoStop = removeStopWords(normalizedExpected);
 
   if (givenNoStop === expectedNoStop) return true;
   if (!givenNoStop || !expectedNoStop) return false;
 
-  // 3. Si la réponse attendue est contenue dans la donnée (ou inversement)
+  // 4. Si la réponse attendue est contenue dans la donnée (ou inversement)
   if (givenNoStop.includes(expectedNoStop) || expectedNoStop.includes(givenNoStop)) {
     const minLen = Math.min(givenNoStop.length, expectedNoStop.length);
     if (minLen >= 3) return true;
   }
 
-  // 4. Similarité par distance de Levenshtein (fautes de frappe)
+  // 5. Similarité par distance de Levenshtein (fautes de frappe)
   if (isSimilar(givenNoStop, expectedNoStop)) return true;
 
-  // 5. Comparaison mot à mot (si 2 mots, on tolère si l'un contient l'autre)
+  // 6. Comparaison mot à mot (si 2 mots, on tolère si l'un contient l'autre)
   const givenWords = givenNoStop.split(' ').filter((w) => w.length >= 2);
   const expectedWords = expectedNoStop.split(' ').filter((w) => w.length >= 2);
 

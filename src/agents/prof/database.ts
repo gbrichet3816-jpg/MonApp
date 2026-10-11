@@ -704,6 +704,13 @@ export async function disableMorningBriefing(db: SQLite.SQLiteDatabase, userId: 
   );
 }
 
+export async function updateMorningBriefingTime(db: SQLite.SQLiteDatabase, userId: string, hour: number, minute: number): Promise<void> {
+  db.runSync(
+    `UPDATE prof_state SET morning_briefing_hour = ?, morning_briefing_minute = ?, updated_at = ? WHERE user_id = ?`,
+    [hour, minute, Date.now(), userId]
+  );
+}
+
 export async function markEveningBriefingSent(db: SQLite.SQLiteDatabase, userId: string): Promise<void> {
   const now = Date.now();
   db.runSync(
@@ -828,7 +835,6 @@ export async function shouldGenerateSummary(
       [userId]
     );
 
-    // Compter les messages depuis le dernier résumé
     const since = lastSummary ? lastSummary.period_end : 0;
     const countRow = db.getFirstSync<{ count: number }>(
       `SELECT COUNT(*) as count FROM prof_messages WHERE user_id = ? AND created_at > ?`,
@@ -836,10 +842,8 @@ export async function shouldGenerateSummary(
     );
     const messageCount = countRow?.count ?? 0;
 
-    // Déclencheur 1 : 30 messages ou plus depuis le dernier résumé
     if (messageCount >= 30) return true;
 
-    // Déclencheur 2 : 24h depuis le dernier résumé (avec au moins 10 messages)
     if (lastSummary) {
       const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
       if (lastSummary.period_end < twentyFourHoursAgo && messageCount >= 10) return true;
@@ -901,7 +905,6 @@ export async function saveLearnedPattern(
   );
 
   if (existing && existing.id !== undefined) {
-    // Incrémenter la confiance et le nombre d'observations
     db.runSync(
       `UPDATE prof_learned_patterns
        SET confidence = MIN(confidence + 1, 5),
@@ -948,27 +951,23 @@ export async function buildMemoryContext(
   try {
     const parts: string[] = [];
 
-    // 1. Profil de l'enfant (déjà utilisé ailleurs, mais on le rappelle)
     const profile = await getProfProfile(db, userId);
     if (profile && profile.child_name && profile.child_name !== 'Enfant') {
       parts.push(`**Profil** : ${profile.child_name}, ${profile.child_age} ans, en ${profile.child_grade}.`);
     }
 
-    // 2. Notions récentes à revoir
     const topicsToReview = await getTopicsToReview(db, userId);
     if (topicsToReview.length > 0) {
       const lines = topicsToReview.map((t) => `- ${t.subject} : ${t.topic} (${t.status})`);
       parts.push(`**À revoir** :\n${lines.join('\n')}`);
     }
 
-    // 3. Derniers résumés de conversation
     const summaries = await getRecentSummaries(db, userId, 3);
     if (summaries.length > 0) {
       const lines = summaries.map((s) => `- ${s.summary}`);
       parts.push(`**Historique récent** :\n${lines.join('\n')}`);
     }
 
-    // 4. Comportements appris
     const patterns = await getLearnedPatterns(db, userId, 5);
     if (patterns.length > 0) {
       const lines = patterns.map((p) => `- [${p.category}] ${p.pattern}`);
